@@ -76,7 +76,11 @@ def _build_items(
     for req in reqs_with_ga:
         alt_upper = {c.upper() for c in req.alternatives}
         within = state.latest_lab_within(req.alternatives, as_of, req.max_age_days)
-        ever_candidates = [lr for lr in state.lab_results if lr.item_code.upper() in alt_upper]
+        # 鐵律5：與 within 一致，未來日期的檢驗結果不代表「已知」資訊——否則
+        # 會產生負的 days_since_last、「已逾期」卻其實是未來日期的假證據。
+        ever_candidates = [
+            lr for lr in state.lab_results if lr.item_code.upper() in alt_upper and lr.result_date <= as_of
+        ]
         most_recent_ever = max(ever_candidates, key=lambda lr: lr.result_date) if ever_candidates else None
         days_since = (as_of - most_recent_ever.result_date).days if most_recent_ever else None
         items.append(

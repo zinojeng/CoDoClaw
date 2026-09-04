@@ -205,8 +205,13 @@ def analyze_clinical_trends(profile: PatientClinicalProfile, config: ClinicalTre
         points_desc = [(lr.result_date, lr.value) for lr in series if lr.value is not None]
         points_desc.sort(key=lambda p: p[0])  # 升冪
 
+        # 鐵律5：as_of 是「以此刻評估」的時間錨點，晚於 as_of 的檢驗結果一律
+        # 不代表「已知」資訊，不論是否設定 lookback_days 都必須排除——否則
+        # 未來日期的檢驗值會被當成「最新一筆」納入趨勢判讀。
+        cutoff = profile.as_of_date
+        points_desc = [(d, v) for d, v in points_desc if d <= cutoff]
+
         if cfg.lookback_days is not None:
-            cutoff = profile.as_of_date
             points_desc = [(d, v) for d, v in points_desc if (cutoff - d).days <= cfg.lookback_days]
 
         used_points = points_desc[-cfg.lookback_n :] if cfg.lookback_n > 0 else points_desc

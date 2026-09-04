@@ -37,7 +37,7 @@ from dm_care_pipeline.trend_analysis import (
     TrendDirection,
     analyze_clinical_trends,
 )
-from dm_care_pipeline.complication_identification import identify_complications
+from dm_care_pipeline.complication_identification import ComplicationConfig, identify_complications
 from dm_care_pipeline.risk import RiskLevel, assess_risk
 from dm_care_pipeline.care_gap import assess_care_gaps
 from dm_care_pipeline.guideline_recommendation import (
@@ -174,6 +174,26 @@ def test_trend_insufficient_data_when_below_min_points():
     assert hba1c.direction == TrendDirection.INSUFFICIENT_DATA
 
 
+def test_trend_ignores_future_dated_lab_results():
+    """回歸測試（Codex #7）：晚於 as_of 的檢驗結果先前未被排除，會被當成
+    「最新一筆」納入趨勢判讀——即使 lookback_days 有設定，負的天數差
+    （未來日期）仍會通過 `<= lookback` 比較。"""
+    state = make_state(
+        lab_results=[
+            LabResult("09006C", AS_OF - timedelta(days=90), value=6.5),
+            LabResult("09006C", AS_OF - timedelta(days=60), value=7.5),
+            LabResult("09006C", AS_OF - timedelta(days=30), value=9.5),
+            LabResult("09006C", AS_OF + timedelta(days=10), value=12.0),  # 未來日期，不應被採用
+        ]
+    )
+    profile = build_patient_clinical_profile(state)
+    report = analyze_clinical_trends(profile, ClinicalTrendConfig(lookback_days=365))
+
+    hba1c = next(mt for mt in report.marker_trends if mt.marker_name == "HBA1C")
+    assert hba1c.latest_value == 9.5
+    assert hba1c.latest_result_date == AS_OF - timedelta(days=30)
+
+
 # ---------------------------------------------------------------------------
 # 3. 併發症辨識
 # ---------------------------------------------------------------------------
@@ -207,6 +227,45 @@ def test_complication_identification_no_false_positive_without_diagnosis():
     profile = build_patient_clinical_profile(state)
     report = identify_complications(profile)
     assert report.findings == ()
+
+
+def test_complication_identification_ignores_future_dated_encounter():
+    """回歸測試（Codex #8）：晚於 as_of 的就診紀錄先前未被排除——即使沒有
+    設定 lookback_years，encounters 也從未被限制在 <= as_of，導致未來日期
+    的診斷產生「目前存在」的併發症判定，且判定日期落在未來。"""
+    state = make_state(encounters=[dm_encounter(AS_OF + timedelta(days=30), icd10="I50.9")])
+    profile = build_patient_clinical_profile(state)
+    report = identify_complications(profile)
+    assert report.findings == ()
+
+
+def test_complication_identification_ignores_future_dated_ckd_assessment():
+    """回歸測試（Codex #8，CKD 分期分支）：`_latest_ckd_stage()` 先前對
+    `ckd_assessments` 取全域最大日期，未限制在 <= as_of，未來日期的評估
+    會蓋過真正最新（但在 as_of 之前）的評估。"""
+    state = make_state(
+        encounters=[dm_encounter(AS_OF - timedelta(days=10), icd10="E11.21")],
+        ckd_assessments=[
+            CKDAssessment(AS_OF - timedelta(days=10), egfr=50.0, upcr=200.0, is_diabetic=True),  # → "3a"
+            CKDAssessment(AS_OF + timedelta(days=30), egfr=10.0, upcr=200.0, is_diabetic=True),  # 未來，不應採用
+        ],
+    )
+    profile = build_patient_clinical_profile(state)
+    report = identify_complications(profile)
+    nephropathy = next(f for f in report.findings if f.category == "NEPHROPATHY")
+    assert nephropathy.ckd_stage == "3a"
+
+
+def test_complication_identification_lookback_years_survives_leap_day():
+    """回歸測試（Codex #9）：as_of 為 2/29 時，`as_of.replace(year=...)`
+    對非閏年目標年會拋 ValueError；改用 `_safe_years_before()` 落回 2/28。"""
+    state = make_state(
+        as_of_date=date(2024, 2, 29),
+        encounters=[dm_encounter(date(2024, 1, 15), icd10="E11.21")],
+    )
+    profile = build_patient_clinical_profile(state)
+    report = identify_complications(profile, ComplicationConfig(lookback_years=1))  # 2023 非閏年
+    assert report.as_of_date == date(2024, 2, 29)
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +339,27 @@ def test_care_gap_reports_unregistered_codes_explicitly():
     report = assess_care_gaps(profile, codes_in_scope=["P1410C"], include_quality_monitoring=False)
     assert "P1410C" in report.unregistered_codes
     assert report.warnings  # 不可靜默視為「無缺漏」
+
+
+def test_care_gap_ignores_future_dated_lab_as_most_recent_ever():
+    """回歸測試（Codex #10）：`most_recent_ever`（供逾期天數/UI顯示用）先前
+    未排除未來日期的檢驗結果，會被當成「史上最新一筆」，產生負的
+    days_since_last，UI 上顯示成「已逾期」卻其實是還沒發生的未來日期。"""
+    state = make_state(
+        claims=[CodeClaim("P1407C", AS_OF - timedelta(days=200))],
+        lab_results=[
+            LabResult("09006C", AS_OF - timedelta(days=400), value=8.0),  # 早於視窗，未滿足but可作history
+            LabResult("09006C", AS_OF + timedelta(days=10), value=7.0),  # 未來日期，不應被採用
+        ],
+    )
+    profile = build_patient_clinical_profile(state)
+    report = assess_care_gaps(profile, codes_in_scope=["P1408C"], include_quality_monitoring=False)
+
+    items = report.by_code["P1408C"]
+    hba1c_item = next(it for it in items if "09006C" in it.requirement.alternatives)
+    assert hba1c_item.most_recent_ever is not None
+    assert hba1c_item.most_recent_ever.result_date == AS_OF - timedelta(days=400)
+    assert hba1c_item.days_since_last == 400
 
 
 # ---------------------------------------------------------------------------

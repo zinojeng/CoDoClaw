@@ -125,8 +125,17 @@ def _effective_code_table(cfg: ComplicationConfig) -> dict[str, tuple[str, ...]]
     return table
 
 
-def _latest_ckd_stage(profile: PatientClinicalProfile) -> Optional[str]:
-    assessments = profile.enrollment_state.ckd_assessments
+def _safe_years_before(d: date, years: int) -> date:
+    """回傳「d 往前 years 年」的日期。d 為 2/29 且目標年非閏年時落回 2/28，
+    而非讓 `date.replace()` 拋出 `ValueError`（鐵律5：邊界日期不得讓管線崩潰）。"""
+    try:
+        return d.replace(year=d.year - years)
+    except ValueError:
+        return d.replace(month=2, day=28, year=d.year - years)
+
+
+def _latest_ckd_stage(profile: PatientClinicalProfile, as_of: date) -> Optional[str]:
+    assessments = [a for a in profile.enrollment_state.ckd_assessments if a.assessment_date <= as_of]
     if not assessments:
         return None
     latest = max(assessments, key=lambda a: a.assessment_date)
@@ -144,10 +153,12 @@ def identify_complications(profile: PatientClinicalProfile, config: Complication
     state = profile.enrollment_state
     as_of = profile.as_of_date
 
-    encounters = state.valid_encounters()
+    # 鐵律5：as_of 是「以此刻評估」的時間錨點，晚於 as_of 的就診紀錄一律不
+    # 代表「已知」資訊，不論是否設定 lookback_years 都必須排除。
+    encounters = [e for e in state.valid_encounters() if e.visit_date <= as_of]
     if cfg.lookback_years is not None:
-        start = as_of.replace(year=as_of.year - cfg.lookback_years)
-        encounters = [e for e in encounters if start <= e.visit_date <= as_of]
+        start = _safe_years_before(as_of, cfg.lookback_years)
+        encounters = [e for e in encounters if start <= e.visit_date]
 
     findings: list[ComplicationFinding] = []
     for category, prefixes in code_table.items():
@@ -174,7 +185,7 @@ def identify_complications(profile: PatientClinicalProfile, config: Complication
         if not matched_codes:
             continue
 
-        ckd_stage = _latest_ckd_stage(profile) if category == "NEPHROPATHY" else None
+        ckd_stage = _latest_ckd_stage(profile, as_of) if category == "NEPHROPATHY" else None
 
         findings.append(
             ComplicationFinding(
