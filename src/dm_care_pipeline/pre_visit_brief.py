@@ -25,6 +25,7 @@ from .trend_analysis import MarkerTrend, QualityMetricTier, TrendDirection
 if TYPE_CHECKING:  # pragma: no cover - 型別提示用，避免執行期循環 import
     from .alert import AlertClassificationConfig
     from .calculators.base import CalculatorResult
+    from .care_gap_clocks import CareGapAgentReport
     from .clinical_state import PatientClinicalState
     from .guideline_recommendation import GuidelineRecommendationReport
     from .physician_decision import PhysicianDecision, PhysicianDecisionRecord
@@ -113,6 +114,7 @@ def generate_pre_visit_brief(
     guideline_report: "GuidelineRecommendationReport",
     decision_record: "PhysicianDecisionRecord",
     alert_config: Optional["AlertClassificationConfig"] = None,
+    care_gap_agent_report: Optional["CareGapAgentReport"] = None,
 ) -> PreVisitDiabetesBrief:
     """純組裝函式：`complication_map` 直接取
     `clinical_state.domain_summaries`（不重新計算紅黃綠三色）；
@@ -128,9 +130,29 @@ def generate_pre_visit_brief(
     未列出；Codex 審閱發現 `pipeline.run_stages_1_to_7()` 原本接受
     `alert_config` 卻從未傳到任何地方，是個沒有作用的參數，此為補上實際
     串接）。未提供時沿用 `alert.classify_alert_batch()` 的預設
-    `AlertClassificationConfig()`。"""
+    `AlertClassificationConfig()`。
+
+    ★ 修正（Codex #29）：`care_gap_agent_report`（`care_gap_clocks.
+    assess_care_gap_agent()` 輸出）產生的 `data_gaps`（Clinical/
+    Patient-Specific Clock「查無任何執行紀錄，無法判斷是否逾期」）逐條
+    明確標記 `relevant_downstream_stages=("pre_visit_brief",)`，但先前
+    本函式的 `data_gaps` 只取 `clinical_state.data_gaps`，`care_gap_
+    agent_report` 從未被傳入——這些明確標示要給 pre_visit_brief 看的缺漏
+    實際上永遠到不了 pre_visit_brief。keyword-only 選填、預設 None 以
+    保持既有呼叫端零改動；提供時只併入標記給本站
+    （"pre_visit_brief" in relevant_downstream_stages）的項目，並依
+    source 去重，避免與 clinical_state.data_gaps 中可能已存在的同一筆
+    缺漏重複列出。"""
     evidence_index = {f.finding_id: f for f in clinical_state.findings}
     alert_report = classify_alert_batch(list(clinical_state.findings), config=alert_config)
+
+    data_gaps = list(clinical_state.data_gaps)
+    if care_gap_agent_report is not None:
+        seen_sources = {g.source for g in data_gaps}
+        for gap in care_gap_agent_report.data_gaps:
+            if "pre_visit_brief" in gap.relevant_downstream_stages and gap.source not in seen_sources:
+                data_gaps.append(gap)
+                seen_sources.add(gap.source)
 
     return PreVisitDiabetesBrief(
         patient_id=profile.patient_id,
@@ -143,5 +165,5 @@ def generate_pre_visit_brief(
         guideline_gap_widget=_build_guideline_gap_widget(decision_record),
         evidence_index=evidence_index,
         alert_report=alert_report,
-        data_gaps=tuple(clinical_state.data_gaps),
+        data_gaps=tuple(data_gaps),
     )

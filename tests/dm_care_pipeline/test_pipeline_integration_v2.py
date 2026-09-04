@@ -370,6 +370,18 @@ def test_pre_visit_brief_assembled_from_same_run():
     assert brief.advanced_risk_widget == tuple(run_result.calculator_results.values())
 
 
+def test_pre_visit_brief_includes_care_gap_clock_data_gaps():
+    """回歸測試（Codex #29）：`care_gap_agent_report.data_gaps`（Clinical/
+    Patient-Specific Clock「查無任何執行紀錄」）明確標記
+    relevant_downstream_stages=("pre_visit_brief",)，端到端跑過
+    `run_stages_1_to_7()` 後應實際出現在 `pre_visit_brief.data_gaps`。"""
+    run_result = _run()
+    clock_gap_sources = {g.source for g in run_result.care_gap_agent_report.data_gaps}
+    brief_gap_sources = {g.source for g in run_result.pre_visit_brief.data_gaps}
+    assert clock_gap_sources  # fixture 缺足部/血管等 Layer1 擴充資料，應有 clock 缺漏
+    assert clock_gap_sources <= brief_gap_sources
+
+
 def test_pre_visit_brief_guideline_gap_widget_excludes_medication_recommendations():
     run_result = _run()
     from dm_care_pipeline.guideline_recommendation import GuidelineRecommendation

@@ -717,7 +717,14 @@ def run_stages_1_to_7(
     )
 
     pre_visit_brief = generate_pre_visit_brief(
-        profile, trend_report, clinical_state, calculator_results, guideline_report, decision_record, alert_config=alert_config
+        profile,
+        trend_report,
+        clinical_state,
+        calculator_results,
+        guideline_report,
+        decision_record,
+        alert_config=alert_config,
+        care_gap_agent_report=care_gap_agent_report,  # ★ 修正（Codex #29）
     )
 
     return PipelineRunResult(

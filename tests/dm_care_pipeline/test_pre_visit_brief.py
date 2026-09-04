@@ -215,6 +215,49 @@ def test_data_gaps_reused_from_clinical_state_not_rebuilt():
     assert brief.data_gaps[0].source == "test"
 
 
+def test_care_gap_agent_report_data_gaps_flow_into_brief():
+    """回歸測試（Codex #29）：`care_gap_clocks.assess_care_gap_agent()` 的
+    `data_gaps` 逐條明確標記 `relevant_downstream_stages=("pre_visit_
+    brief",)`，但先前 `generate_pre_visit_brief()` 完全不接受
+    `care_gap_agent_report` 參數，這些明確標示要給本站看的缺漏永遠到不了
+    這裡。"""
+    from dm_care_pipeline.care_gap_clocks import CareGapAgentReport
+    from dm_care_pipeline.pipeline_models import DataGapFlag
+
+    clinical_state = make_clinical_state(())
+    care_gap_agent_report = CareGapAgentReport(
+        patient_id="P1",
+        as_of_date=AS_OF,
+        clinical_clock=[],
+        p4p_clock=[],
+        patient_specific_clock=[],
+        advanced_screening_gaps=[],
+        data_gaps=[
+            DataGapFlag(
+                source="care_gap_clocks:FOOT_EXAM",
+                status="missing",
+                detail="查無任何執行紀錄，無法判斷是否逾期",
+                relevant_downstream_stages=("pre_visit_brief",),
+            ),
+            DataGapFlag(
+                source="care_gap_clocks:OTHER_STAGE_ONLY",
+                status="missing",
+                detail="這筆缺漏標記給別的站，不該出現在 pre_visit_brief",
+                relevant_downstream_stages=("some_other_stage",),
+            ),
+        ],
+    )
+    brief = generate_pre_visit_brief(
+        _FakeProfile("P1", AS_OF), make_trend_report(), clinical_state, {},
+        GuidelineRecommendationReport(patient_id="P1", as_of_date=AS_OF),
+        present_for_decision([], patient_id="P1", as_of_date=AS_OF),
+        care_gap_agent_report=care_gap_agent_report,
+    )
+    gap_sources = {g.source for g in brief.data_gaps}
+    assert "care_gap_clocks:FOOT_EXAM" in gap_sources
+    assert "care_gap_clocks:OTHER_STAGE_ONLY" not in gap_sources
+
+
 def test_patient_id_and_as_of_date_come_from_profile():
     brief = generate_pre_visit_brief(
         _FakeProfile("P99", date(2025, 1, 1)), make_trend_report(), make_clinical_state(()), {},
