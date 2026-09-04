@@ -540,10 +540,12 @@ def run_stages_1_to_7(
     中間結果。第7站僅初始化一份全 PENDING 的決策紀錄，實際決策由醫師 UI
     逐筆呼叫 `decision_record.record_decision()`。
 
-    `codes_in_scope` 未指定時，預設取
-    `profile.eligibility_report.eligible_codes()`（若無 eligibility_report
+    `codes_in_scope` 未指定時，預設取 `profile.eligibility_report.results`
+    的全部代碼（不論該代碼目前 eligible 與否——若無 eligibility_report
     則為空清單，並不視為錯誤——呼叫端此時可自行決定要評估哪些代碼的
-    Care Gap）。
+    Care Gap）。刻意不用 `eligible_codes()`：一個代碼常常正是因為缺某項
+    檢驗才 ineligible，用 eligible_codes() 當預設 scope 會讓那筆缺漏永遠
+    不被檢查（Codex #3）。
 
     ★ v2 新增流程（既有 v1 流程不變，只是在其後追加）：計算
     `calculator_registry`（預設 `DEFAULT_CALCULATOR_REGISTRY`）中已註冊、
@@ -585,7 +587,17 @@ def run_stages_1_to_7(
     risk_result = assess_risk(profile, trend_report, complication_report, calculator=risk_calculator, config=risk_config)
 
     if codes_in_scope is None:
-        codes_in_scope = profile.eligibility_report.eligible_codes() if profile.eligibility_report else []
+        # ★ 修正（Codex #3）：先前預設用 eligible_codes()——只有「已達成
+        # 資格」的代碼才會被送進 assess_care_gaps()。但一個代碼之所以還不
+        # eligible，往往正是因為缺了某項檢驗；用 eligible_codes() 當預設
+        # scope，等於系統性地把「這位病人缺哪些檢驗才能達成資格」這個
+        # care gap 最有價值的用途整個隱藏掉——P1408C 因為缺 09005C 而
+        # ineligible 時，P1408C 根本不在 eligible_codes() 裡，於是那筆缺漏
+        # 永遠不會被 assess_care_gaps() 檢查、更不會出現在
+        # deduplicated_missing_items。改為取 EligibilityReport.results 的
+        # 全部代碼（不論 eligible 與否）——這正是 EligibilityEngine.
+        # evaluate() 一律會評估的固定代碼集合，care gap 分析本就該涵蓋。
+        codes_in_scope = [r.code for r in profile.eligibility_report.results] if profile.eligibility_report else []
     care_gap_report = assess_care_gaps(
         profile, codes_in_scope, config=care_gap_config, include_quality_monitoring=include_quality_monitoring
     )

@@ -39,7 +39,7 @@ from dm_care_pipeline.trend_analysis import (
 )
 from dm_care_pipeline.complication_identification import ComplicationConfig, identify_complications
 from dm_care_pipeline.risk import RiskLevel, assess_risk
-from dm_care_pipeline.care_gap import assess_care_gaps
+from dm_care_pipeline.care_gap import _QUALITY_MONITORING_PSEUDO_CODE, assess_care_gaps
 from dm_care_pipeline.guideline_recommendation import (
     GuidelineRecommendationEngine,
     build_guideline_input,
@@ -362,6 +362,32 @@ def test_care_gap_ignores_future_dated_lab_as_most_recent_ever():
     assert hba1c_item.days_since_last == 400
 
 
+def test_care_gap_quality_monitoring_requires_same_day_dm_encounter_with_a10():
+    """回歸測試（Codex #4）：品質監測（180天強制檢驗排程）只有「當次(as_of)
+    確實有一筆 DM 診斷 + A10 藥物並存的就診」才會觸發（見
+    dm_eligibility.rules_p14.check_quality_monitoring() docstring 逐字出處）。
+    先前 include_quality_monitoring=True（預設值）時無條件產生四類強制
+    排程項目，完全沒有就診紀錄的病人也會收到品質監測缺漏。"""
+    state = make_state()  # 無 encounters
+    profile = build_patient_clinical_profile(state)
+    report = assess_care_gaps(profile, codes_in_scope=[], include_quality_monitoring=True)
+    assert _QUALITY_MONITORING_PSEUDO_CODE not in report.by_code
+
+
+def test_care_gap_quality_monitoring_triggers_on_matching_encounter():
+    """正向對照：當次就診確實是 DM 診斷 + A10 藥物時，應觸發品質監測，且
+    血脂四項需拆成 4 個各自獨立項目（Codex #5）——單一總膽固醇不足以
+    滿足整組。"""
+    state = make_state(encounters=[dm_encounter(AS_OF, icd10="E11.9", with_med=True)])
+    profile = build_patient_clinical_profile(state)
+    report = assess_care_gaps(profile, codes_in_scope=[], include_quality_monitoring=True)
+
+    assert _QUALITY_MONITORING_PSEUDO_CODE in report.by_code
+    items = report.by_code[_QUALITY_MONITORING_PSEUDO_CODE]
+    lipid_descriptions = {it.requirement.description for it in items if "血脂四項" in it.requirement.description}
+    assert len(lipid_descriptions) == 4  # 4 個各自獨立項目，非合併成一項
+
+
 # ---------------------------------------------------------------------------
 # 6. Guideline Recommendation
 # ---------------------------------------------------------------------------
@@ -595,3 +621,31 @@ def test_pipeline_end_to_end_integration():
     final_result = finalize_pipeline(run_result)
     assert final_result.followup_plan.next_recommended_visit_date >= AS_OF
     assert isinstance(final_result.education_plan.topics, list)
+
+
+def test_pipeline_default_scope_surfaces_gap_that_causes_ineligibility():
+    """回歸測試（Codex #3）：P1408C 因缺 09005C 而 ineligible 時，
+    `codes_in_scope` 預設值先前是 `eligible_codes()`——P1408C 根本不在
+    其中，這筆本應是「care gap 最有價值用途」的缺漏（缺這項檢驗導致
+    無法達成資格）永遠不會出現在 care_gap_report。改用
+    `eligibility_report.results` 全部代碼後，即使 P1408C 尚未 eligible，
+    它的必要檢驗仍應被檢查、缺漏應出現在 care_gap_report。"""
+    state = make_state(
+        encounters=[dm_encounter(AS_OF, icd10="E11.21")],
+        claims=[CodeClaim("P1407C", AS_OF - timedelta(days=100))],
+        lab_results=[
+            LabResult("09006C", AS_OF - timedelta(days=10), value=8.0),
+            # 刻意缺 09005C（P1408C 另一必要項目）→ P1408C 應為 ineligible
+        ],
+    )
+    eligibility_report = EligibilityEngine().evaluate(state)
+    assert eligibility_report.get("P1408C").eligible is False
+    assert "P1408C" not in eligibility_report.eligible_codes()
+
+    run_result = run_stages_1_to_7(state, eligibility_report=eligibility_report)
+
+    assert "P1408C" in run_result.care_gap_report.by_code
+    unsatisfied = {
+        it.requirement.description for it in run_result.care_gap_report.by_code["P1408C"] if not it.satisfied
+    }
+    assert any("09005C" in desc for desc in unsatisfied)

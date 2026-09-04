@@ -16,8 +16,6 @@ from datetime import date
 from enum import Enum
 from typing import Callable, Literal, Mapping, Optional, Sequence, TYPE_CHECKING
 
-from dm_eligibility import rules_p7
-
 from .calculators.base import CalculatorExecutionStatus, CalculatorResult
 from .care_gap import CareGapItem, CareGapReport
 from .clinical_data_object import ClinicalStatus
@@ -348,23 +346,22 @@ def _iwgdf_foot_frequency_reminder_matcher(inp: GuidelineRecommendationInput) ->
     ]
 
 
-# P7001/P7002 必要檢驗項目代碼（含 GA 替代前不重複硬編，直接 reuse
-# rules_p7.py，鐵律7）；只取 alternatives 供比對，不重抄天數視窗。
-_NHI_CKD_P4P_LAB_ITEM_CODES: frozenset[str] = frozenset(
-    code.upper()
-    for req in (*rules_p7.P7001_LAB_REQUIREMENTS_BASE, *rules_p7.P7002_LAB_REQUIREMENTS_BASE)
-    for code in req.alternatives
-)
+# P7001/P7002 照護碼（非檢驗項目代碼——見下方 matcher 註解）。
+_NHI_CKD_P4P_CODES: frozenset[str] = frozenset({"P7001C", "P7002C"})
 
 
 def _nhi_ckd_p4p_lab_gap_matcher(inp: GuidelineRecommendationInput) -> list[RecommendationEvidence]:
-    """直接 reuse `rules_p7.P7001_LAB_REQUIREMENTS_BASE`/
-    `P7002_LAB_REQUIREMENTS_BASE`（鐵律7：不重抄檢驗代碼本身），對
-    `inp.care_gaps`（`CareGapReport.deduplicated_missing_items`）做交集比對。"""
+    """對 `inp.care_gaps`（`CareGapReport.deduplicated_missing_items`）比對
+    `item.owning_codes`（由 `care_gap.assess_care_gaps()` 登記，記錄這筆
+    缺漏實際來自哪個照護碼的登記），而非拿檢驗項目代碼（`source_codes`）去
+    猜。P14（P1407C/P1408C/P1409C）與 P7（P7001C/P7002C）的必要檢驗項目
+    代碼高度重疊（如 09006C HbA1c、12111C Mic-Cr 兩邊都要），先前用
+    `source_codes` 與 P7 檢驗代碼集合做交集比對，會把純 P14/品質監測缺漏
+    誤標成「P7（糖尿病合併早期腎病變）照護品質必要檢驗項目缺漏」
+    （Codex #6）。"""
     evidence: list[RecommendationEvidence] = []
     for item in inp.care_gaps:
-        codes_upper = {c.upper() for c in item.source_codes}
-        if codes_upper & _NHI_CKD_P4P_LAB_ITEM_CODES:
+        if set(item.owning_codes) & _NHI_CKD_P4P_CODES:
             evidence.append(
                 RecommendationEvidence(
                     evidence_type=EvidenceType.CARE_GAP,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from dm_eligibility import rules_p7
+from dm_eligibility import rules_p14, rules_p7
 from dm_eligibility.models import PatientEnrollmentState
 
 from dm_care_pipeline.calculators.base import CalculatorExecutionStatus, CalculatorResult, CalculatorTier
@@ -155,10 +155,31 @@ def test_nhi_ckd_p4p_lab_gap_matches_p7_lab_item_codes():
         days_since_last=None,
         source_codes=p7_req.alternatives,
         spec_reference="P7 spec (d)",
+        owning_codes=("P7001C",),
     )
     report = GuidelineRecommendationEngine().build(_base_input(care_gaps=(item,)))
     hit = next(r for r in report.recommendations if r.rule_id == "NHI_CKD_P4P_LAB_GAP")
     assert hit.guideline_id == "Taiwan_NHI_CKD_P4P_2026"
+
+
+def test_nhi_ckd_p4p_lab_gap_silent_for_p14_item_despite_overlapping_lab_code():
+    """回歸測試（Codex #6）：09006C(HbA1c) 同時是 P1408C 與 P7001C 的必要
+    檢驗項目，先前用 source_codes 與 P7 檢驗代碼集合比對，會把純 P1408C
+    的缺漏誤標成 P7 缺漏。現在必須依 owning_codes 判斷——這筆缺漏明確只
+    來自 P1408C 的登記，不應觸發 NHI_CKD_P4P_LAB_GAP。"""
+    p14_req = rules_p14.P1408_LAB_REQUIREMENTS_BASE[0]  # 09006C HbA1c（P7001C 也需要同一代碼）
+    item = CareGapItem(
+        requirement=p14_req,
+        satisfied=False,
+        most_recent_within_window=None,
+        most_recent_ever=None,
+        days_since_last=None,
+        source_codes=p14_req.alternatives,
+        spec_reference="P14 spec (b) B.3",
+        owning_codes=("P1408C",),
+    )
+    report = GuidelineRecommendationEngine().build(_base_input(care_gaps=(item,)))
+    assert not any(r.rule_id == "NHI_CKD_P4P_LAB_GAP" for r in report.recommendations)
 
 
 def test_nhi_ckd_p4p_lab_gap_silent_for_unrelated_care_gap():
