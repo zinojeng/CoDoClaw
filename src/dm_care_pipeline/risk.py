@@ -54,10 +54,31 @@ class RiskFactorSnapshot:
     as_of_date: date
     hba1c_trend: Optional[MarkerTrend]
     ldl_trend: Optional[MarkerTrend]
-    latest_systolic_bp: Optional[float] = None  # TODO：models.py 目前無 BP 資料結構，恆為 None（見架構文件第8節#3）
+    latest_systolic_bp: Optional[float] = None  # 取自 profile.vital_signs 最新一筆（見 _latest_bp()）
     latest_diastolic_bp: Optional[float] = None
     complications: frozenset[str] = frozenset()  # COMPLICATION_ICD10_PREFIXES 的 key 集合
     ckd_stage: Optional[str] = None
+    # ★ 修正（Codex #12）：`complications` 空集合本身無法區分「真的查過、
+    # 沒有併發症」跟「根本沒有就診紀錄可查」——需要另外攜帶這個訊號，見
+    # RuleBasedRiskCalculator 併發症分支。
+    encounters_present: bool = False
+
+
+def _latest_bp(profile: PatientClinicalProfile) -> tuple[Optional[float], Optional[float]]:
+    """★ 修正（Codex #11）：`profile.vital_signs`（架構文件v2 3.1節新增）
+    早已可攜帶 SBP/DBP，但本函式先前無條件回傳 (None, None)，讓呼叫端
+    供應的血壓資料整條被丟棄，血壓因子恆顯示「無血壓資料」。取
+    `vital_signs` 中日期最新、且至少有一個 BP 值不為 None 的一筆；鐵律5：
+    晚於 as_of 的觀測值不代表「已知」資訊，一併排除。"""
+    candidates = [
+        v
+        for v in profile.vital_signs
+        if v.observation_date <= profile.as_of_date and (v.systolic_bp is not None or v.diastolic_bp is not None)
+    ]
+    if not candidates:
+        return None, None
+    latest = max(candidates, key=lambda v: v.observation_date)
+    return latest.systolic_bp, latest.diastolic_bp
 
 
 def build_risk_factor_snapshot(
@@ -68,16 +89,18 @@ def build_risk_factor_snapshot(
     ldl_trend = next((mt for mt in trend_report.marker_trends if mt.marker_name == "LDL"), None)
     complications = frozenset(f.category for f in complication_report.findings)
     ckd_stage = next((f.ckd_stage for f in complication_report.findings if f.category == "NEPHROPATHY" and f.ckd_stage), None)
+    latest_systolic_bp, latest_diastolic_bp = _latest_bp(profile)
 
     return RiskFactorSnapshot(
         patient_id=profile.patient_id,
         as_of_date=profile.as_of_date,
         hba1c_trend=hba1c_trend,
         ldl_trend=ldl_trend,
-        latest_systolic_bp=None,
-        latest_diastolic_bp=None,
+        latest_systolic_bp=latest_systolic_bp,
+        latest_diastolic_bp=latest_diastolic_bp,
         complications=complications,
         ckd_stage=ckd_stage,
+        encounters_present=bool(profile.enrollment_state.encounters),
     )
 
 
@@ -162,7 +185,7 @@ class RuleBasedRiskCalculator:
                 )
             )
 
-        # --- 血壓（placeholder，恆為 None，見架構文件第8節#3）-----------------
+        # --- 血壓（切點為 placeholder；資料來源見 build_risk_factor_snapshot._latest_bp()）-----------------
         if snapshot.latest_systolic_bp is None and snapshot.latest_diastolic_bp is None:
             contributions.append(
                 RiskFactorContribution(
@@ -206,10 +229,25 @@ class RuleBasedRiskCalculator:
                     rationale="placeholder: 簡化規則",
                 )
             )
-        else:
+        elif snapshot.encounters_present:
+            # 真的有就診紀錄可查、且沒有命中任何併發症分類，才是 grounded LOW。
             contributions.append(
                 RiskFactorContribution(
                     factor="complication", value_summary="未辨識出併發症", level=RiskLevel.LOW, rationale="grounded: 依 complication_identification 辨識結果"
+                )
+            )
+        else:
+            # ★ 修正（Codex #12）：完全沒有就診紀錄時，空的 complications
+            # 集合不代表「查過、沒有併發症」，而是「根本沒資料可查」。先前
+            # 這裡無條件回傳 LOW，而其餘因子（HbA1c/LDL/BP/CKD）在無資料時
+            # 皆為 UNKNOWN，會讓 max(known_levels) 把完全沒有資料的病人
+            # 判定成整體 LOW 風險——比「無法判斷」更危險的假性安全訊號。
+            contributions.append(
+                RiskFactorContribution(
+                    factor="complication",
+                    value_summary="查無就診紀錄，無法辨識併發症",
+                    level=RiskLevel.UNKNOWN,
+                    rationale="無法判斷：查無就診紀錄（見 complication_identification 之 warnings）",
                 )
             )
 

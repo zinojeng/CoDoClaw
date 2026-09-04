@@ -294,6 +294,41 @@ def test_risk_overall_level_high_when_hba1c_poor_and_complication_present():
     assert hba1c_contribution.level == RiskLevel.HIGH
 
 
+def test_risk_uses_supplied_blood_pressure():
+    """回歸測試（Codex #11）：`build_risk_factor_snapshot()` 先前無條件把
+    SBP/DBP 寫死成 None，即使 profile.vital_signs 有提供資料也整條丟棄，
+    血壓因子永遠顯示「無血壓資料」。"""
+    from dm_care_pipeline.clinical_data_layer import VitalSignObservation
+
+    state = make_state()
+    vitals = (VitalSignObservation(observation_date=AS_OF, systolic_bp=180, diastolic_bp=110),)
+    profile = build_patient_clinical_profile(state, vital_signs=vitals)
+    trend_report = analyze_clinical_trends(profile)
+    complication_report = identify_complications(profile)
+    risk_result = assess_risk(profile, trend_report, complication_report)
+
+    bp_contribution = next(c for c in risk_result.contributions if c.factor == "blood_pressure")
+    assert "180" in bp_contribution.value_summary
+    assert "110" in bp_contribution.value_summary
+    assert bp_contribution.level == RiskLevel.HIGH
+
+
+def test_risk_overall_unknown_not_low_when_no_encounter_data():
+    """回歸測試（Codex #12）：完全沒有就診紀錄時，併發症因子先前無條件回傳
+    LOW（「未辨識出併發症」），其餘因子（HbA1c/LDL/BP/CKD）在無資料時皆為
+    UNKNOWN，導致 max(known_levels) 只看到唯一的 LOW，把完全沒有資料的
+    病人判定成整體「低風險」——比「無法判斷」更危險的假性安全訊號。"""
+    state = make_state()  # 無 encounters、無 lab_results
+    profile = build_patient_clinical_profile(state)
+    trend_report = analyze_clinical_trends(profile)
+    complication_report = identify_complications(profile)
+    risk_result = assess_risk(profile, trend_report, complication_report)
+
+    complication_contribution = next(c for c in risk_result.contributions if c.factor == "complication")
+    assert complication_contribution.level == RiskLevel.UNKNOWN
+    assert risk_result.overall_risk_level == RiskLevel.UNKNOWN
+
+
 # ---------------------------------------------------------------------------
 # 5. Care Gap
 # ---------------------------------------------------------------------------
