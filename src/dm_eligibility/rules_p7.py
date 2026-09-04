@@ -30,16 +30,45 @@ from .models import (
 P7001_FIRST_INTERVAL_DAYS = 49
 P7001_SUBSEQUENT_INTERVAL_DAYS = 70
 
-# P7001C 必要檢驗項目。出處：P7 spec (d)。
-P7001_LAB_REQUIREMENTS_BASE: tuple[LabRequirement, ...] = (
-    LabRequirement(("09005C",), 40, "B.S(09005系列)"),
-    LabRequirement(("09006C",), 40, "HbA1C(或GA)"),
-    LabRequirement(("09044C",), 60, "LDL"),
-    LabRequirement(("09015C",), 60, "Cr(血清肌酸酐)"),
-    LabRequirement(("12111C",), 60, "UACR(微量白蛋白)"),
-)
+# P7001C 必要檢驗項目。出處：P7 spec (d)「檢驗報告日期規範（依批碼分次
+# 要求不同）」：
+#   P700101（當年度第1次）：B.S ≤40天、HbA1C或GA ≤40天。
+#   P700102（當年度第2次）：LDL ≤60天、Cr ≤60天。
+#   P700103（當年度第3次）：UACR(0933) ≤60天。
+# ★ 修正（CoDoClaw session 轉交之 Codex review 發現）：先前不分次數，
+# 每次申報都要求備齊全部5項檢驗——但規格書明文是「依批碼分次要求不同
+# 項目」，5項檢驗分散在當年度3次申報裡，不是每次都要全部備齊。改為依
+# 「當年度第幾次申報」查對應子集，見 _p7001_lab_requirements_for_claim_number()。
+P7001_LAB_REQUIREMENTS_BY_CLAIM_NUMBER: dict[int, tuple[LabRequirement, ...]] = {
+    1: (  # P700101
+        LabRequirement(("09005C",), 40, "B.S(09005系列)"),
+        LabRequirement(("09006C",), 40, "HbA1C(或GA)"),
+    ),
+    2: (  # P700102
+        LabRequirement(("09044C",), 60, "LDL"),
+        LabRequirement(("09015C",), 60, "Cr(血清肌酸酐)"),
+    ),
+    3: (  # P700103
+        LabRequirement(("12111C",), 60, "UACR(微量白蛋白)"),
+    ),
+}
 
-# P7002C 必要檢驗項目。出處：P7 spec (d)。
+
+def _p7001_lab_requirements_for_claim_number(claim_number: int) -> tuple[LabRequirement, ...]:
+    """回傳「當年度第 claim_number 次」P7001C申報所需檢驗子集。
+    claim_number clamp 到 1~3——年度上限本就是3次(見check_p7001_eligibility
+    的年度上限檢查)，超過3的情形理論上已被年度上限擋下，此處保守回傳
+    第3次的檢驗需求作為fallback，不代表規格書對第4次以上有明文規定。
+    """
+    clamped = min(max(claim_number, 1), 3)
+    return P7001_LAB_REQUIREMENTS_BY_CLAIM_NUMBER[clamped]
+
+# P7002C 必要檢驗項目。出處：P7 spec (d)：「B.S、HbA1C或GA、SGPT、TG、
+# CHO、LDL、HDL、Cr、Mic/Cr及U/R(二擇一)、NMRP」。
+# ★ 修正（CoDoClaw session 轉交之 Codex review 發現）：Mic/Cr(12111C)
+# 與 U/R(06013C，尿液分析，即P1407/P1409用的同一個代碼) 依規格書是
+# 二擇一，先前 alternatives 只放了12111C一項，等於沒有真正允許U/R這個
+# 替代選項，「二擇一」的描述文字與實際檢查邏輯不一致。
 P7002_LAB_REQUIREMENTS_BASE: tuple[LabRequirement, ...] = (
     LabRequirement(("09005C",), 40, "B.S"),
     LabRequirement(("09006C",), 60, "HbA1C(或GA)"),
@@ -49,7 +78,7 @@ P7002_LAB_REQUIREMENTS_BASE: tuple[LabRequirement, ...] = (
     LabRequirement(("09044C",), 40, "LDL"),
     LabRequirement(("09043C",), 40, "HDL"),
     LabRequirement(("09015C",), 60, "Cr"),
-    LabRequirement(("12111C",), 60, "Mic/Cr、U/R(二擇一)"),
+    LabRequirement(("12111C", "06013C"), 60, "Mic/Cr(12111C)、U/R(06013C)(二擇一)"),
     LabRequirement(("23501C", "23502C"), 180, "NMRP(眼底檢查)"),
 )
 
@@ -76,13 +105,38 @@ def check_p4301_eligibility(
     if state.ckd_assessments:
         latest_assessment = max(state.ckd_assessments, key=lambda a: a.assessment_date)
 
-    if latest_assessment is None or latest_assessment.stage() is None:
-        missing.append(MissingReason(MissingReasonKind.DATA_GAP, "查無符合Stage1/2/3a條件之CKD分期評估資料(eGFR/UPCR/UACR)"))
+    if latest_assessment is None:
+        missing.append(MissingReason(MissingReasonKind.DATA_GAP, "查無CKD分期評估資料(eGFR/UPCR/UACR)"))
+    elif latest_assessment.stage() is None:
+        # ★ Codex review 發現的分類錯誤修正：stage()==None 同時涵蓋「資料
+        # 不足以判定」與「資料已齊全但不符合Stage1/2/3a」兩種情形，不可
+        # 一律歸為DATA_GAP（後者屬確定排除，應為BLOCKED，否則背景流程會
+        # 誤協助安排本就不需要的追加檢驗）。見 CKDAssessment.data_incomplete()。
+        if latest_assessment.data_incomplete():
+            missing.append(
+                MissingReason(
+                    MissingReasonKind.DATA_GAP,
+                    "CKD分期評估資料不足，無法判定是否符合Stage1/2/3a"
+                    "(缺eGFR，或eGFR在需蛋白尿佐證之範圍但UPCR/UACR未全數測得——"
+                    "糖尿病患須UPCR與UACR皆已測得且皆未達標才能排除，任一項缺測"
+                    "皆可能是遺漏的陽性結果)",
+                )
+            )
+        else:
+            missing.append(
+                MissingReason(MissingReasonKind.BLOCKED, "CKD分期評估資料齊全，但不符合Stage1/2/3a條件")
+            )
     else:
         reasons.append(f"CKD分期評估符合Stage{latest_assessment.stage()}")
 
+    # ★ 修正（CoDoClaw session 轉交之 Codex review 發現）：規格書明文是
+    # 「收案前九十天內曾在該院所就醫」——「收案前」代表這是新收案當次
+    # 就診「以外」、更早的就醫紀錄。先前用 encounters_within(as_of-90,
+    # as_of) 含 as_of 當天，若病人只有當次新收案這一筆就診、之前完全
+    # 沒來過，會把「當次就診本身」誤算成滿足「收案前曾就醫」，等於這條
+    # 前提永遠不會擋人。改為窗口不含 as_of 當天。
     window_start = as_of - timedelta(days=90)
-    prior_visits = state.encounters_within(window_start, as_of)
+    prior_visits = state.encounters_within(window_start, as_of - timedelta(days=1))
     if len(prior_visits) == 0:
         missing.append(MissingReason(MissingReasonKind.PREREQUISITE, "收案前90天內查無該院所就醫紀錄"))
     else:
@@ -186,12 +240,14 @@ def check_p7001_eligibility(
         if state.count_claims("P7001C", year=as_of.year) >= 3:
             missing.append(MissingReason(MissingReasonKind.TIMING, "當年度P7001C已達上限3次"))
 
+    claim_number_this_year = state.count_claims("P7001C", year=as_of.year) + 1
+    lab_requirements = _p7001_lab_requirements_for_claim_number(claim_number_this_year)
     ok, lab_missing = rules_p14.check_lab_requirements(
-        state, rules_p14._with_ga_substitute(P7001_LAB_REQUIREMENTS_BASE, cfg), as_of
+        state, rules_p14._with_ga_substitute(lab_requirements, cfg), as_of
     )
     missing.extend(lab_missing)
     if ok:
-        reasons.append("P7001C必要檢驗齊全")
+        reasons.append(f"P7001C(當年度第{min(claim_number_this_year, 3)}次)必要檢驗齊全")
 
     eligible = len(missing) == 0
     return EligibilityResult(
@@ -299,16 +355,27 @@ def check_p7003_eligibility(
     latest_assessment = None
     if state.ckd_assessments:
         latest_assessment = max(state.ckd_assessments, key=lambda a: a.assessment_date)
-    referral_indicated = False
-    if latest_assessment is not None:
-        if latest_assessment.upcr is not None and latest_assessment.upcr >= 1000:
-            referral_indicated = True
-        if latest_assessment.egfr is not None and latest_assessment.egfr < 45:
-            referral_indicated = True
-    if not referral_indicated:
-        missing.append(MissingReason(MissingReasonKind.BLOCKED, "未符合轉診條件(UPCR>=1000或eGFR<45)"))
+    # ★ Codex review 發現的分類錯誤修正：原本 referral_indicated 預設
+    # False，「查無評估資料」與「評估資料齊全但確定未達轉診條件」都會被
+    # 歸為同一個BLOCKED訊息——前者其實是缺檢驗(DATA_GAP)，不是確定排除。
+    if latest_assessment is None:
+        missing.append(MissingReason(MissingReasonKind.DATA_GAP, "查無CKD評估資料(UPCR/eGFR)，無法判定是否符合轉診條件"))
     else:
-        reasons.append("符合轉診條件(UPCR>=1000或eGFR<45)")
+        upcr_qualifies = latest_assessment.upcr is not None and latest_assessment.upcr >= 1000
+        egfr_qualifies = latest_assessment.egfr is not None and latest_assessment.egfr < 45
+        if upcr_qualifies or egfr_qualifies:
+            reasons.append("符合轉診條件(UPCR>=1000或eGFR<45)")
+        elif latest_assessment.upcr is None or latest_assessment.egfr is None:
+            missing.append(
+                MissingReason(
+                    MissingReasonKind.DATA_GAP,
+                    "UPCR或eGFR資料不全，無法確定是否符合轉診條件(UPCR>=1000或eGFR<45)",
+                )
+            )
+        else:
+            missing.append(
+                MissingReason(MissingReasonKind.BLOCKED, "UPCR與eGFR資料齊全，但未達轉診條件(UPCR>=1000或eGFR<45)")
+            )
 
     if state.pre_esrd_referral_confirmed is None:
         missing.append(MissingReason(MissingReasonKind.BLOCKED, "Pre-ESRD計畫收案確認狀態未知，需人工查證後方可判斷"))

@@ -194,6 +194,43 @@ class CKDAssessment:
             return "3a"
         return None
 
+    def data_incomplete(self) -> bool:
+        """True 表示 `stage()` 回傳 None 是因為「資料不足以判定」，而非
+        「資料已齊全、確定不符合Stage1/2/3a」——呼叫端據此決定要分類為
+        DATA_GAP（協助安排補做檢驗）還是 BLOCKED（確定不符合，非缺資料）。
+
+        ★ 工程補充判斷，非規格書逐字條文：
+          - 缺eGFR：資料不足（DATA_GAP）。
+          - eGFR<45：Stage3a門檻(45~59.9)以下，資料已足以判定不符合
+            （BLOCKED）——即使蛋白尿資料也缺，eGFR本身已排除Stage1/2/3a。
+          - 45<=eGFR<60：Stage3a只看eGFR，不需蛋白尿佐證，資料已足夠
+            （不會是data_incomplete，此時必為符合）。
+          - eGFR>=60：Stage1/2需蛋白尿(UPCR>=150或糖尿病患UACR>=30)佐證，
+            兩者為「任一達標即算陽性」的OR關係。若已知其中一項達標，
+            資料足夠（已符合）。若尚未達標，必須「每一個可能讓其變陽性
+            的檢驗項目都已測得」才能確定是「真的不符合」而非「還有檢驗
+            沒做」：非糖尿病只需UPCR一項；糖尿病則UPCR與UACR兩項都要
+            測得——只測其中一項且為陰性，另一項仍可能是遺漏的陽性結果，
+            此時仍屬資料不足（DATA_GAP），不可視為確定不符合（BLOCKED）。
+            ★ Codex review 二次驗證發現的修正：先前用 or 判斷「蛋白尿
+            資料是否已知」，導致糖尿病患者只測UPCR或只測UACR其中一項
+            (陰性)、另一項缺測時，被誤判為資料齊全，錯誤歸為BLOCKED。
+        """
+        if self.egfr is None:
+            return True
+        if self.egfr < 60:
+            return False  # <45或45~59.9：Stage3a判定僅需eGFR，資料已足夠
+        proteinuria_positive = (self.upcr is not None and self.upcr >= 150) or (
+            self.is_diabetic and self.uacr is not None and self.uacr >= 30
+        )
+        if proteinuria_positive:
+            return False  # 已符合，非缺資料（理論上 stage() 此時不會是 None）
+        if self.upcr is None:
+            return True  # UPCR未測，仍可能是遺漏的陽性結果
+        if self.is_diabetic and self.uacr is None:
+            return True  # 糖尿病患者UACR未測，仍可能是遺漏的陽性結果
+        return False  # 每個可能讓其陽性的項目都已測得且皆未達標，確定不符合
+
 
 # ---------------------------------------------------------------------------
 # 彙整病人狀態
@@ -255,9 +292,18 @@ class PatientEnrollmentState:
         return self.count_claims(code) > 0
 
     def last_claim_date(self, codes: str | Sequence[str], before: Optional[date] = None) -> Optional[date]:
+        """回傳指定照護碼中，`before`（含）之前最新一筆申報日期。
+
+        ★ 修正（CoDoClaw session 轉交之 Codex review 發現）：`before`
+        先前用嚴格 `<` 過濾，會讓「同一天已有一筆同代碼申報紀錄」被排除
+        在外——所有呼叫端都是拿這個結果算「距上次申報間隔幾天」，若當天
+        已有一筆申報卻被忽略，會往回找到更早一筆申報來計算天數，可能
+        誤判「間隔已足夠」而允許同一天再次申報同一碼。改為 `<=`，讓
+        「今天已申報過」正確算出0天間隔、擋下同日重複申報。
+        """
         matched = self.claims_of(codes)
         if before is not None:
-            matched = [c for c in matched if c.claim_date < before]
+            matched = [c for c in matched if c.claim_date <= before]
         if not matched:
             return None
         return max(c.claim_date for c in matched)
@@ -332,19 +378,30 @@ class MissingReasonKind(str, Enum):
     """
 
     TIMING = "timing"
-    # 時間間隔/年度次數上限尚未到、或已收案且尚未結案（重複收案被擋）——
-    # 這是完全正常的排程狀態，會隨時間/下個年度自動解除，背景自動化流程
-    # 應保持靜默，不通知、不中斷照護流程。
+    # 時間間隔/年度次數上限尚未到、已收案且尚未結案（重複收案被擋）、
+    # 同院所1年內結案冷卻期、醫師停權（有明訂到期日）等——這些狀態的
+    # 共通點是「以日期為準、屆期後自動解除，不需任何人介入」，且原因
+    # 本身通常已在事件發生當下由個管/品管流程審閱記錄過，每次評估重複
+    # 回報不會帶來新資訊，只會製造每日洗版通知。背景自動化流程應保持
+    # 靜默，不通知、不中斷照護流程。★ 分類決策依據：「是否純以日期
+    # 判定、屆期自動解除」，而非「原因是否重要」——重要但會自動解除的
+    # 狀態（如醫師停權）仍歸TIMING，一次性事件通知應由狀態變更當下觸發
+    # 的獨立事件機制負責，不由本引擎的每次評估重複承擔（2026-09-05
+    # review 後定案，過去版本曾將醫師停權/結案冷卻期歸為BLOCKED，已更正）。
     DATA_GAP = "data_gap"
-    # 缺檢驗/評估資料——背景自動化流程可考慮據此協助安排/開立所需檢驗
-    # 項目（見 diabetes_P4P repo README〈架構與缺口〉分支B的討論）。
+    # 缺檢驗/評估資料，或現有資料不足以判定是否符合條件（例如某個判定
+    # 門檻需要兩項數值佐證、目前只測得一項）——背景自動化流程可考慮據此
+    # 協助安排/開立所需檢驗項目（見 diabetes_P4P repo README〈架構與缺口〉
+    # 分支C的討論；注意「資料不足」與「資料齊全但確定不符合」需分開判斷，
+    # 後者應歸為BLOCKED，見 rules_p7.check_p4301_eligibility 的示範）。
     PREREQUISITE = "prerequisite"
     # 前置照護碼、累計就醫次數或累計申報次數尚未達成——需先完成前一階段
     # 才能繼續，非本次就診當下可單獨解決，但通常值得個管人員留意進度。
     BLOCKED = "blocked"
-    # 排除條件命中，或需要人工查證/確認（VPN他院收案查核、Pre-ESRD轉診
-    # 確認、年齡、主診斷、用藥、掛號診別、結案排除等）——需要醫師或個管
-    # 人員做判斷/確認，不會隨時間自動解除。
+    # 排除條件命中，且需要人工查證/確認或資料修正才能解除（VPN他院收案
+    # 查核、Pre-ESRD轉診確認、年齡、主診斷、用藥、掛號診別、醫師P70雙重
+    # 資格未具備等）——不是單純日期問題，時間流逝本身不會讓這些狀態自動
+    # 消失，需要醫師、個管人員或行政端實際做判斷/確認/修正資料。
 
 
 @dataclass(frozen=True)
