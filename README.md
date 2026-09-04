@@ -44,7 +44,7 @@ CoDoClaw/
 
 ```bash
 pip install -r requirements.txt
-pytest tests/ -q   # 406 個測試
+pytest tests/ -q   # 415 個測試
 ```
 
 ## 架構：Layer 1-7 + Calculator Service
@@ -67,7 +67,8 @@ dm_eligibility（凍結，只 reuse 不改）
 └───────────────────────────────────┬────────────────────────────────────┘
         ┌───────────────────────────┼──────────────────────────────┐
         ▼                           ▼                              ▼
- trend_analysis.py    complication_identification.py      care_gap.py
+ trend_analysis.py      complication_identification.py     care_gap.py
+ ckd_progression.py                 │                              │
         │                           │                              │
         │              ┌────────────┴───────────┐                  │
         │              ▼                         ▼                  │
@@ -109,7 +110,8 @@ src/dm_care_pipeline/
 ├── clinical_data_object.py         §30/§31 共用型別：ClinicalDomain/ClinicalStatus/ClinicalFinding/
 │                                    ModelProvenance/compose_clinical_data_objects()
 ├── clinical_state.py               Layer2：derive_clinical_state() → PatientClinicalState
-├── trend_analysis.py               QualityMetricTier/analyze_clinical_trends()
+├── trend_analysis.py               QualityMetricTier/analyze_clinical_trends()（HbA1c/LDL）
+├── ckd_progression.py              §11 Component B：analyze_ckd_progression()（eGFR slope/UACR trajectory）
 ├── complication_identification.py  COMPLICATION_ICD10_PREFIXES/identify_complications()
 ├── risk.py                         RuleBasedRiskCalculator（illustrative placeholder）/assess_risk()
 ├── care_gap.py                     CARE_GAP_REGISTRY/assess_care_gaps()
@@ -132,6 +134,59 @@ src/dm_care_pipeline/
 完整的整合裁定過程、規格書明文依據 vs 工程假設對照表、六段獨立設計如何
 統一命名/型別、以及仍待人工協調事項清單，請見
 `docs/臨床決策支援管線設計_v2_OpenClaw.md`。
+
+## `OpenClaw for Diabetes HIS.md` 章節對照
+
+逐節列出規格書內容與本 repo 的對應實作，讓讀者不用自己逐段比對兩份文件
+就能看出「哪裡做了、哪裡還沒做」。✅ 已實作（含測試）；⚠️ 部分實作；
+❌ 尚未實作。
+
+| 規格章節 | 內容 | 狀態 | 對應模組 |
+|---|---|---|---|
+| §3 Layer 1 Clinical Data Layer | HIS/LIS/CPOE/CVIS/PACS/眼科/足科/血管/行政系統資料整合 | ✅ | `data_integration.py`、`clinical_data_layer.py` |
+| §4 Layer 2 Patient Clinical State | 病人事實來源 | ✅ | `clinical_state.py` |
+| §5 四種狀態層級 | Confirmed/Suspected/High-risk/Care gap | ✅ | `clinical_data_object.ClinicalStatus` |
+| §6.1 CKD G/A Classification | eGFR+UACR → G/A 分期 | ✅ | `calculators/ckd_ga.py` |
+| §6.2 FIB-4 | 肝纖維化風險 | ✅ | `calculators/fib4.py` |
+| §6.3 WATCH-DM | 5年心衰竭風險 | ✅（Tier B） | `calculators/tier_b/watch_dm.py` |
+| §6.4 BNP/NT-proBNP HF Screening | 心衰竭生物標記篩檢 | ✅ | `calculators/bnp_hf_screen.py` |
+| §6.5 ABI/TBI | PAD screening | ✅ | `calculators/abi_tbi.py` |
+| §7 PREVENT / ASCVD | Secondary/Primary prevention 分流、legacy PCE 並存 | ✅（Tier B） | `calculators/tier_b/prevent_ascvd.py` |
+| §8 ADA Hypoglycemia Risk (Level 1) | insulin/SU/meglitinide + major/minor risk factors | ✅ | `calculators/hypoglycemia_ada_l1.py` |
+| §9 Karter Hypoglycemia Risk | 6-variable EHR model | ✅（Tier B） | `calculators/tier_b/karter_hypoglycemia.py` |
+| §10 IWGDF Diabetic Foot Risk | Category 0-3 分級 | ✅ | `calculators/iwgdf_foot.py` |
+| §11 CKD Progression Engine — Component A（G/A） | — | ✅ | `calculators/ckd_ga.py` |
+| §11 CKD Progression Engine — Component B（縱向趨勢） | eGFR slope / UACR trajectory | ✅ | `ckd_progression.py` |
+| §12 KFRE | 4-variable Kidney Failure Risk Equation | ✅（Tier B，含 CKD 適用性判斷） | `calculators/tier_b/kfre.py` |
+| §13 Calculator Library 總架構 | 全部 Tier A/B 計算工具 | ✅ | `calculators/registry.py` |
+| §14 Complication Detection Agent | Microvascular/Macrovascular/Cardiometabolic | ✅ | `complication_identification.py` |
+| §15 Guideline Rule Engine | 版本化 guideline library（8 部） | ✅ | `guideline_recommendation.GUIDELINE_LIBRARY` |
+| §16-17 Medication Intelligence Agent | Guideline-Directed Medication Check、Read→Detect→Recommend→Physician Approve→Execute | ✅ | `medication_intelligence.py`、`physician_decision.py` |
+| §18 Care-Gap Agent | Clinical/P4P/Patient-Specific 三時鐘 | ✅ | `care_gap_clocks.py` |
+| §19 P4P Agent | This Visit Care Gap（Completed/Missing/Due soon） | ✅ | `care_gap.py` |
+| §20 OpenClaw Agent Team | Orchestrator + 多個子 Agent 編排 | ❌ | 本 repo 是純 deterministic pipeline（`pipeline.py` 薄編排層依序呼叫各模組），沒有 Agent/LLM 編排層——見 §34 |
+| §21-26 Pre-Visit Brief + Widget 1-6 | Today/3-Year Trend/Complication Map/Advanced Risk/Guideline Gap/Evidence | ✅ | `pre_visit_brief.py` |
+| §27 Patient Education | 個人化衛教報告 | ✅ | `education.py` |
+| §28 Follow-up Agent | 醫令完成度追蹤 | ✅ | `followup.py` |
+| §29 Population Health Agent | 全院族群掃描 + Priority Queue | ❌ | 本 repo 目前僅支援單病人評估（`run_stages_1_to_7(state, ...)` 一次一位），沒有跨病人批次掃描/排序 |
+| §30-31 Clinical/Calculator Data Object | 結構化結果物件 | ✅ | `clinical_data_object.py`、`calculators/base.py` |
+| §32 Alert 分級 | Information/Clinical Attention/Safety Alert | ✅ | `alert.py` |
+| §33 醫令變更原則 | Human-in-the-loop | ✅ | `physician_decision.py`（無任何自動核准路徑） |
+| §34 Deterministic Calculator / Rule Engine / LLM Agent 分離 | — | ⚠️ | Calculator + Rule Engine 兩層完整實作；LLM Agent（整合/解釋/summarization/病人溝通）不在本 repo 範圍——本 repo 定位是這兩層的決策支援引擎本身，不含 LLM 整合層 |
+| §35 Version Control | calculator/guideline 版本化 | ⚠️ | `calculator_id`/`calculator_version`、`GuidelineSource.version` 已有欄位；未建立跨版本並存/回溯查詢機制 |
+| §36 Audit Trail | Agent 看了什麼/算了什麼/醫師是否接受 | ⚠️ | `physician_decision.to_audit_trail()` 涵蓋醫師決策軌跡；未涵蓋「讀取了哪些原始資料」的完整流程級稽核 |
+| §37 Local Validation | PREVENT/WATCH-DM/KFRE/Karter 台灣本地驗證狀態 | ✅ | `ModelProvenance.taiwan_local_validation_status` + 文獻佐證（見 Tier B 各檔案 docstring 引用 PMID） |
+| §38-39 MVP 開發順序 / 第一版優先六件事 | Patient Summary+Trend／Complication Map／Care Gap／Advanced Risk／Medication Gap／Patient Education | ✅ 六項全數實作 | 見上列對應模組 |
+
+**已知未實作的兩塊（§20、§29）不是遺漏，是刻意的範圍界線**：本 repo 定位
+是「決策支援引擎」本身（deterministic calculator + rule engine + 單病人
+一次評估），不是完整的 Agent 框架或族群健康管理平台。若日後要做，
+§29（Population Health Agent）在架構上可以直接重用本 repo 現有的
+`run_stages_1_to_7()` 對整個 Diabetes Registry 逐一呼叫，再依
+`clinical_state`/`care_gap_agent_report` 產生的訊號排序成 Priority
+Queue；§20（Agent Team/Orchestrator）則需要在本 repo之上另建一層
+LLM/Agent 編排，本 repo 的每個模組已經是該編排層可以呼叫的「deterministic
+tool」。
 
 ## ⚠️ 使用前必讀：placeholder 與需臨床覆核事項
 
