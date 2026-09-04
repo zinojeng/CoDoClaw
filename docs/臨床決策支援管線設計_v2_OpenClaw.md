@@ -1397,4 +1397,4 @@ tests/dm_care_pipeline/             # 沿用 v1 建議，逐檔對應一份測�
 
 ---
 
-*本文件由整合六段獨立設計而成，建立在 `docs/臨床決策支援管線設計.md`（v1）已落地的 `src/dm_care_pipeline/` 九站骨架之上。實作過程中若發現本文件與規格書、dm_eligibility 既有程式碼、或 v1 文件有進一步落差，應優先以 `OpenClaw for Diabetes HIS.md`、`src/dm_eligibility/` 既有程式碼與 `spec/P14_rules_spec.md`/`spec/P7_rules_spec.md` 為準，並回頭更新本文件。任何標記「★」或「TODO」的假設，正式上線前一律需要臨床/品管/藥劑/倫理端逐項覆核（見第5節 open_questions），不可視為已定案。*
+*本文件由整合六段獨立設計而成，建立在 `docs/臨床決策支援管線設計.md`（v1）已落地的 `src/dm_care_pipeline/` 九站骨架之上。實作過程中若發現本文件與規格書、dm_eligibility 既有程式碼、或 v1 文件有進一步落差，應優先以 `OpenClaw for Diabetes HIS.md`、`src/dm_eligibility/` 既有程式碼與 diabetes_P4P repo 的 `spec/P14_rules_spec.md`/`spec/P7_rules_spec.md` 為準，並回頭更新本文件。任何標記「★」或「TODO」的假設，正式上線前一律需要臨床/品管/藥劑/倫理端逐項覆核（見第5節 open_questions），不可視為已定案。*

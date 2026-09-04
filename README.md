@@ -26,9 +26,6 @@ CoDoClaw/
 ├── README.md                        本文件
 ├── requirements.txt                  最小相依套件（pytest）
 ├── OpenClaw for Diabetes HIS.md      設計所依據的原始規格文件
-├── spec/
-│   ├── P14_rules_spec.md              P14 收案規則規格書（供追溯）
-│   └── P7_rules_spec.md               P7 收案規則規格書（供追溯）
 ├── docs/
 │   ├── 系統設計說明.md                  dm_eligibility 架構說明
 │   ├── 臨床決策支援管線設計.md            九站骨架設計文件
