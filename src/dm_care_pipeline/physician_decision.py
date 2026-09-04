@@ -70,7 +70,23 @@ class PhysicianDecisionRecord:
     decisions: dict[str, PhysicianDecision] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # ★ 修正（Codex #24）：`decisions` 是以 recommendation_id 為 key 的
+        # dict——先前若兩筆不同的 Reviewable 剛好撞了同一個
+        # recommendation_id（例如 guideline_recommendation.py 與
+        # medication_intelligence.py 的自訂規則 rule_id 撞名，見兩檔案對應
+        # 修正），這裡會靜默把兩筆合併成同一筆 decision entry，醫師對其中
+        # 一筆的決策會被誤讀成對另一筆的決策，且完全沒有任何錯誤或警告。
+        # 建構時就明確擋下撞名，而不是留到醫師決策階段才產生無法解釋的
+        # 資料不一致。
+        seen_ids: set[str] = set()
         for rec in self.presented_recommendations:
+            if rec.recommendation_id in seen_ids:
+                raise DecisionValidationError(
+                    f"recommendation_id={rec.recommendation_id!r} 在 presented_recommendations 中重複出現——"
+                    "兩筆不同建議不可共用同一個 recommendation_id（會在 decisions dict 中被靜默合併），"
+                    "請確認各建議來源（guideline/medication/自訂規則）的 rule_id 命名空間不互相碰撞"
+                )
+            seen_ids.add(rec.recommendation_id)
             if rec.recommendation_id not in self.decisions:
                 self.decisions[rec.recommendation_id] = PhysicianDecision(recommendation_id=rec.recommendation_id)
 

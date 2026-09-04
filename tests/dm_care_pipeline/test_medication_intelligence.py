@@ -225,6 +225,14 @@ def test_kidney_protective_therapy_gap_triggers_when_ckd_and_no_protective_drug(
     assert "Kidney-protective therapy gap detected" in hit.review_panel.indication
 
 
+def test_recommendation_id_has_medication_namespace_prefix():
+    """回歸測試（Codex #24），medication_intelligence.py 對照版本。"""
+    inp = make_check_input(kdigo_g_stage="G3a", kdigo_a_stage="A3", active_drug_classes=frozenset({"METFORMIN"}))
+    report = build_medication_intelligence_report(inp)
+    hit = next(r for r in report.recommendations if r.rule_id == "KIDNEY_PROTECTIVE_THERAPY_GAP")
+    assert hit.recommendation_id.startswith("medication:KIDNEY_PROTECTIVE_THERAPY_GAP::")
+
+
 def test_kidney_protective_therapy_gap_silent_when_sglt2i_present():
     inp = make_check_input(kdigo_g_stage="G3a", kdigo_a_stage="A3", active_drug_classes=frozenset({"SGLT2_INHIBITOR"}))
     report = build_medication_intelligence_report(inp)

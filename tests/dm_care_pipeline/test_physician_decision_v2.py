@@ -140,6 +140,27 @@ def test_present_for_decision_still_works_with_guideline_report_keyword():
     assert record.patient_id == "P1"
 
 
+def test_duplicate_recommendation_id_across_sources_raises_instead_of_silently_merging():
+    """回歸測試（Codex #24）：guideline_recommendation.py 與
+    medication_intelligence.py 是兩份各自獨立的 rule_id 命名空間，先前組
+    recommendation_id 的公式完全相同（rule_id::patient::date），若自訂
+    規則的 rule_id 剛好撞名，兩筆本應獨立的建議會在 decisions dict（以
+    recommendation_id 為 key）被靜默合併成一筆，醫師對其中一筆的決策會
+    被誤讀成對另一筆的決策。建構 PhysicianDecisionRecord 時應直接擋下。"""
+    colliding_id = "SAME_RULE_ID::P1::2024-06-01"
+    rec_a = _med_rec(colliding_id)
+    rec_b = MedicationRecommendation(
+        recommendation_id=colliding_id,  # 故意撞名，模擬另一個來源的建議
+        rule_id="A_DIFFERENT_RULE",
+        title="An entirely independent recommendation",
+        priority=RecommendationPriority.ROUTINE,
+        related_finding_id=None,
+        review_panel=rec_a.review_panel,
+    )
+    with pytest.raises(DecisionValidationError, match="重複出現"):
+        present_for_decision([rec_a, rec_b], patient_id="P1", as_of_date=AS_OF)
+
+
 def test_record_decision_and_accepted_or_modified_works_across_mixed_types():
     medication_report = MedicationIntelligenceReport(
         patient_id="P1", as_of_date=AS_OF, recommendations=[_med_rec("R1")]

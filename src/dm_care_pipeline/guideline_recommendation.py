@@ -595,7 +595,15 @@ class GuidelineRecommendationEngine:
             if not evidence:
                 continue
             rationale = "；".join(e.detail for e in evidence)
-            recommendation_id = f"{rule.rule_id}::{input_data.patient_id}::{input_data.as_of_date.isoformat()}"
+            # ★ 修正（Codex #24）：加上 "guideline:" 命名空間前綴——
+            # guideline_recommendation.py 與 medication_intelligence.py
+            # 是兩份各自獨立的 rule_id 命名空間，先前兩邊組 recommendation_id
+            # 的公式完全相同（rule_id::patient::date），若呼叫端自訂規則
+            # 的 rule_id 剛好撞名，兩筆本應獨立的建議會在
+            # PhysicianDecisionRecord.decisions（以 recommendation_id 為
+            # key 的 dict）合併成同一筆，醫師對其中一筆的決策會被誤讀成
+            # 對另一筆的決策。
+            recommendation_id = f"guideline:{rule.rule_id}::{input_data.patient_id}::{input_data.as_of_date.isoformat()}"
 
             related_finding_id: Optional[str] = None
             if rule.related_finding_id_matcher is not None:

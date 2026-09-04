@@ -462,7 +462,11 @@ def build_medication_intelligence_report(
             guideline_source=rule.guideline_id,
             guideline_section_or_spec_reference=rule.spec_reference,
         )
-        recommendation_id = f"{rule.rule_id}::{inp.patient_id}::{inp.as_of_date.isoformat()}"
+        # ★ 修正（Codex #24）：加上 "medication:" 命名空間前綴，避免與
+        # guideline_recommendation.py 的 rule_id 撞名時在
+        # PhysicianDecisionRecord.decisions 合併成同一筆（見該檔案對應
+        # 修正的完整說明）。
+        recommendation_id = f"medication:{rule.rule_id}::{inp.patient_id}::{inp.as_of_date.isoformat()}"
         recommendations.append(
             MedicationRecommendation(
                 recommendation_id=recommendation_id,

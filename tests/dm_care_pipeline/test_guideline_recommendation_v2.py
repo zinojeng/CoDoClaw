@@ -162,6 +162,26 @@ def test_nhi_ckd_p4p_lab_gap_matches_p7_lab_item_codes():
     assert hit.guideline_id == "Taiwan_NHI_CKD_P4P_2026"
 
 
+def test_recommendation_id_has_guideline_namespace_prefix():
+    """回歸測試（Codex #24）：recommendation_id 需帶命名空間前綴，避免與
+    medication_intelligence.py 的自訂規則 rule_id 撞名時在
+    PhysicianDecisionRecord.decisions 被靜默合併。"""
+    p7_req = rules_p7.P7001_LAB_REQUIREMENTS_BY_CLAIM_NUMBER[1][0]
+    item = CareGapItem(
+        requirement=p7_req,
+        satisfied=False,
+        most_recent_within_window=None,
+        most_recent_ever=None,
+        days_since_last=None,
+        source_codes=p7_req.alternatives,
+        spec_reference="P7 spec (d)",
+        owning_codes=("P7001C",),
+    )
+    report = GuidelineRecommendationEngine().build(_base_input(care_gaps=(item,)))
+    hit = next(r for r in report.recommendations if r.rule_id == "NHI_CKD_P4P_LAB_GAP")
+    assert hit.recommendation_id.startswith("guideline:NHI_CKD_P4P_LAB_GAP::")
+
+
 def test_nhi_ckd_p4p_lab_gap_silent_for_p14_item_despite_overlapping_lab_code():
     """回歸測試（Codex #6）：09006C(HbA1c) 同時是 P1408C 與 P7001C 的必要
     檢驗項目，先前用 source_codes 與 P7 檢驗代碼集合比對，會把純 P1408C
