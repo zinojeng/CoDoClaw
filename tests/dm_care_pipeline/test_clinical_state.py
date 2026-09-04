@@ -248,6 +248,75 @@ def test_core_part1_domain_gray_when_absolutely_no_data():
     assert clinical_state.domain_summaries[ClinicalDomain.KIDNEY].traffic_light == TrafficLight.GRAY
 
 
+def _build_state_no_care_gap_scope(state: PatientEnrollmentState):
+    """比照 test_core_part1_domain_gray_when_absolutely_no_data()：
+    codes_in_scope=[] 避免 P1407C 的必要檢驗缺漏（黃燈 CARE_GAP finding）
+    蓋過本測試真正要驗證的「無 finding 時的 fallback 判準」。"""
+    profile = build_patient_clinical_profile(state)
+    trend_report = analyze_clinical_trends(profile)
+    complication_report = identify_complications(profile)
+    care_gap_report = assess_care_gaps(profile, codes_in_scope=[], include_quality_monitoring=False)
+    risk_result = assess_risk(profile, trend_report, complication_report)
+    return derive_clinical_state(profile, complication_report, care_gap_report, risk_result)
+
+
+def test_kidney_domain_gray_for_unrelated_encounter_without_ckd_data():
+    """回歸測試（Codex #23）：與腎臟完全無關的就診（無 CKDAssessment、
+    無腎功能檢驗，診斷碼也非腎臟相關）不應讓 KIDNEY domain 顯示綠燈——
+    先前只要「有任何一筆就診或檢驗紀錄」就視為已評估，一筆氣喘回診也會
+    讓 KIDNEY 顯示「No abnormal finding documented」。"""
+    state = PatientEnrollmentState(patient_id="P1", as_of_date=AS_OF, encounters=[dm_encounter(AS_OF, icd10="J45.9")])
+    clinical_state = _build_state_no_care_gap_scope(state)
+    assert clinical_state.domain_summaries[ClinicalDomain.KIDNEY].traffic_light == TrafficLight.GRAY
+
+
+def test_kidney_domain_green_when_ckd_assessment_present():
+    """正向對照：真的有 CKDAssessment（eGFR/UACR）時，KIDNEY 才顯示綠燈。"""
+    state = PatientEnrollmentState(
+        patient_id="P1",
+        as_of_date=AS_OF,
+        encounters=[dm_encounter(AS_OF, icd10="J45.9")],
+        ckd_assessments=[CKDAssessment(AS_OF, egfr=90.0, upcr=10.0, is_diabetic=True)],
+    )
+    clinical_state = _build_state_no_care_gap_scope(state)
+    assert clinical_state.domain_summaries[ClinicalDomain.KIDNEY].traffic_light == TrafficLight.GREEN
+
+
+def test_glycemic_control_domain_has_relevant_data_requires_hba1c_lab():
+    """回歸測試（Codex #23），GLYCEMIC_CONTROL 對照版本：直接單元測試
+    `_domain_has_relevant_data()`（而非透過完整 pipeline）——GLYCEMIC_
+    CONTROL 在完整 pipeline 中永遠會被 `risk.py` 的 placeholder finding
+    蓋成 YELLOW（`ClinicalStateConfig.placeholder_risk_finding_domain`
+    預設固定掛在此 domain，與本次修正的 fallback 分支判準是兩件獨立的
+    事，故在此改為直接測試判準函式本身，避免被無關的既有行為蓋掉）。"""
+    from dm_care_pipeline.clinical_state import _domain_has_relevant_data
+
+    state_without_hba1c = PatientEnrollmentState(
+        patient_id="P1", as_of_date=AS_OF, encounters=[dm_encounter(AS_OF, icd10="J45.9")]
+    )
+    profile_without_hba1c = build_patient_clinical_profile(state_without_hba1c)
+    assert _domain_has_relevant_data(ClinicalDomain.GLYCEMIC_CONTROL, profile_without_hba1c) is False
+
+    state_with_hba1c = PatientEnrollmentState(
+        patient_id="P1",
+        as_of_date=AS_OF,
+        encounters=[dm_encounter(AS_OF, icd10="J45.9")],
+        lab_results=[LabResult("09006C", AS_OF, value=7.0)],
+    )
+    profile_with_hba1c = build_patient_clinical_profile(state_with_hba1c)
+    assert _domain_has_relevant_data(ClinicalDomain.GLYCEMIC_CONTROL, profile_with_hba1c) is True
+
+
+def test_ascvd_domain_still_green_for_any_encounter_with_diagnoses():
+    """ASCVD/CEREBROVASCULAR 透過 ICD 診斷碼辨識（`identify_complications()`
+    掃描全部就診之診斷欄位，診斷碼可能出現在任一次就診，不侷限特定檢驗
+    代碼）——與 KIDNEY/GLYCEMIC_CONTROL 需要專屬檢驗資料不同，任一次有
+    記錄診斷的就診即視為已評估，維持既有行為（非本次修正範圍）。"""
+    state = PatientEnrollmentState(patient_id="P1", as_of_date=AS_OF, encounters=[dm_encounter(AS_OF, icd10="J45.9")])
+    clinical_state = _build_state_no_care_gap_scope(state)
+    assert clinical_state.domain_summaries[ClinicalDomain.ASCVD].traffic_light == TrafficLight.GREEN
+
+
 # ---------------------------------------------------------------------------
 # PatientClinicalState accessor 方法
 # ---------------------------------------------------------------------------

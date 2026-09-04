@@ -419,6 +419,48 @@ def _risk_placeholder_findings(
     return out
 
 
+# HbA1c（或 GA 替代）之檢驗代碼，供 GLYCEMIC_CONTROL domain 的「是否有
+# 相關資料可評估」判斷使用。與 pipeline.py `_latest_lab_value(profile,
+# ("09006C", "09139C"))` 用同一組代碼（鐵律7：不重複定義另一份 HbA1c
+# 代碼常數），比 trend_analysis.py 預設 marker 定義（只列 09006C）更寬鬆，
+# 涵蓋 GA 替代規則。
+GLYCEMIC_CONTROL_LAB_ITEM_CODES: tuple[str, ...] = ("09006C", "09139C")
+
+
+def _domain_has_relevant_data(domain: ClinicalDomain, profile: "PatientClinicalProfile") -> bool:
+    """★ 修正（Codex #23）：先前對 KIDNEY/ASCVD/CEREBROVASCULAR/
+    GLYCEMIC_CONTROL/HYPOGLYCEMIA 這 5 個「不依賴 Layer1 擴充來源」的
+    domain，一律用「病人有沒有任何一筆就診或檢驗紀錄」（完全不論是否與
+    該 domain 相關）當作「已評估」的判準——一筆與糖尿病照護完全無關的
+    就診（例如氣喘回診、無任何檢驗）就足以讓這 5 個 domain 全部顯示綠燈
+    「No abnormal finding documented」，即使腎功能/血糖從未真正被檢查過。
+
+    改為依 domain 性質分開判斷：
+    - KIDNEY：需要實際腎功能檢驗資料（`CKDAssessment`，eGFR/UACR），一般
+      就診的診斷欄位不構成腎功能已評估的證據。
+    - GLYCEMIC_CONTROL：需要實際 HbA1c（或 GA 替代）檢驗結果。
+    - ASCVD/CEREBROVASCULAR：透過 ICD 診斷碼辨識（`identify_complications()`
+      掃描全部就診之 `diagnoses`，診斷碼可能出現在任一次就診，非侷限特定
+      檢驗代碼）——維持「有記錄診斷的就診」為已評估的判準，但要求該次
+      就診的 `diagnoses` 非空，而非只要「有就診紀錄」就算數。
+    - HYPOGLYCEMIA：低血糖風險評估的前提是用藥狀態（insulin/SU/
+      meglitinide），與 `pipeline._build_ada_hypo_inputs()` 的
+      `has_encounter_data` 判準一致——任一就診紀錄即代表用藥狀態可查。
+    """
+    state = profile.enrollment_state
+    if domain == ClinicalDomain.KIDNEY:
+        return bool(state.ckd_assessments)
+    if domain == ClinicalDomain.GLYCEMIC_CONTROL:
+        return any(code in profile.lab_series_by_item for code in GLYCEMIC_CONTROL_LAB_ITEM_CODES)
+    if domain in (ClinicalDomain.ASCVD, ClinicalDomain.CEREBROVASCULAR):
+        return any(e.diagnoses for e in state.valid_encounters())
+    if domain == ClinicalDomain.HYPOGLYCEMIA:
+        return bool(state.encounters)
+    # 其餘不在此 5 domain 名單內、也不在 DOMAIN_TO_SOURCE_REGISTRY_FIELD 的
+    # domain（理論上不應出現，防禦性保留舊行為）：有任何就診/檢驗紀錄即可。
+    return bool(state.encounters or state.lab_results)
+
+
 def _domain_traffic_light(
     domain: ClinicalDomain,
     domain_findings: tuple[ClinicalFinding, ...],
@@ -448,9 +490,9 @@ def _domain_traffic_light(
         # 「已篩檢陰性」證據時，寧可保守回報 GRAY 而非默認 GREEN（鐵律6）。
         return TrafficLight.GRAY
     # 不依賴 Layer1 擴充來源的 domain（仰賴 dm_eligibility 核心 HIS/LIS 資料）：
-    # 有任何就診/檢驗紀錄即視為已評估 → GREEN；完全無資料 → GRAY。
-    state = profile.enrollment_state
-    if state.encounters or state.lab_results:
+    # 需有與該 domain 真正相關的資料才視為已評估 → GREEN；否則 → GRAY
+    # （Codex #23：不可用「任何一筆無關紀錄」冒充「已評估」）。
+    if _domain_has_relevant_data(domain, profile):
         return TrafficLight.GREEN
     return TrafficLight.GRAY
 
