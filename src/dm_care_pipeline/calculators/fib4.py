@@ -33,6 +33,15 @@ YOUNG_AGE_WARNING_THRESHOLD = 35
 OLD_AGE_WARNING_THRESHOLD = 65
 
 
+def _invalid_numeric_fields(field_map: dict[str, Optional[float]]) -> tuple[str, ...]:
+    """★ 修正（Codex #19）：年齡/AST/ALT/Platelet 皆不可能為負值或 NaN——
+    先前只擋掉「恰好等於 0」，負的 ALT 會讓 `math.sqrt()` 直接拋
+    `ValueError` 讓整條管線崩潰；負的 Platelet 會算出負的 FIB-4 卻仍被
+    當成「較低風險」正常回傳；NaN 輸入同樣會算出 NaN 又被判為「較低
+    風險」。任一欄位為負值或 NaN 一律視為資料異常，不計算。"""
+    return tuple(name for name, value in field_map.items() if value is not None and (math.isnan(value) or value < 0))
+
+
 @dataclass(frozen=True)
 class FIB4Inputs:
     patient_id: str
@@ -65,11 +74,14 @@ class FIB4Calculator:
         # ALT/Platelet = 0 會造成除以零/開根號分母為零，視為資料無效，
         # 一律 INSUFFICIENT_DATA（不得以例外/NaN 混入結果）。
         invalid_zero = (inputs.alt_u_l == 0) or (inputs.platelet_10e9_l == 0)
+        invalid_numeric = _invalid_numeric_fields(field_map)
 
-        if missing or invalid_zero:
+        if missing or invalid_zero or invalid_numeric:
             warnings = []
             if invalid_zero:
                 warnings.append("ALT 或 Platelet 為 0，FIB-4 公式分母無效，無法計算")
+            if invalid_numeric:
+                warnings.append(f"以下欄位數值異常（負值或 NaN，不可能為合法檢驗值），無法計算：{', '.join(invalid_numeric)}")
             return CalculatorResult(
                 calculator_id=self.calculator_id,
                 calculator_version=self.calculator_version,

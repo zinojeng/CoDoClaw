@@ -42,6 +42,35 @@ def test_formula_matches_spec():
     assert result.execution_status == CalculatorExecutionStatus.COMPUTED
 
 
+def test_negative_alt_is_insufficient_data_not_exception():
+    """回歸測試（Codex #19）：先前只擋 ALT==0，負的 ALT 會讓
+    math.sqrt(負數) 直接拋 ValueError，讓整條管線崩潰而非回傳
+    INSUFFICIENT_DATA。"""
+    result = calc.compute(
+        FIB4Inputs(patient_id="P1", as_of=AS_OF, age_years=50, ast_u_l=40, alt_u_l=-5, platelet_10e9_l=200)
+    )
+    assert result.execution_status == CalculatorExecutionStatus.INSUFFICIENT_DATA
+
+
+def test_negative_platelet_is_insufficient_data_not_falsely_low_risk():
+    """回歸測試（Codex #19）：負的 Platelet 先前會算出負的 FIB-4，因
+    < 1.3 而被判為「較低風險」正常回傳——負值本身就是不可能的檢驗結果，
+    不該被拿去算出一個看似合理的低風險數字。"""
+    result = calc.compute(
+        FIB4Inputs(patient_id="P1", as_of=AS_OF, age_years=50, ast_u_l=40, alt_u_l=40, platelet_10e9_l=-200)
+    )
+    assert result.execution_status == CalculatorExecutionStatus.INSUFFICIENT_DATA
+
+
+def test_nan_ast_is_insufficient_data_not_falsely_low_risk():
+    """回歸測試（Codex #19）：NaN 輸入先前會算出 NaN，因 NaN >= 1.3 為
+    False 而被判為「較低風險」正常回傳。"""
+    result = calc.compute(
+        FIB4Inputs(patient_id="P1", as_of=AS_OF, age_years=50, ast_u_l=math.nan, alt_u_l=40, platelet_10e9_l=200)
+    )
+    assert result.execution_status == CalculatorExecutionStatus.INSUFFICIENT_DATA
+
+
 def test_above_threshold_is_suspected():
     result = calc.compute(
         FIB4Inputs(patient_id="P1", as_of=AS_OF, age_years=50, ast_u_l=100, alt_u_l=20, platelet_10e9_l=100)

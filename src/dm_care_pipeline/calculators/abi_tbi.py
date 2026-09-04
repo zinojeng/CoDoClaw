@@ -78,6 +78,22 @@ def _evaluate_side(side: str, abi: Optional[float], tbi: Optional[float]) -> _Si
     return _SideEvaluation(side, "normal", f"{side}: TBI={tbi}（正常，ABI缺值）")
 
 
+def _side_missing_inputs(side: str, abi: Optional[float], tbi: Optional[float], evaluation: _SideEvaluation) -> tuple[str, ...]:
+    """★ 修正（Codex #17）：`_evaluate_side()` 對 noncompressible（ABI>1.40）
+    但缺 TBI 的情形回傳 `insufficient_data`，但呼叫端先前只在「兩側皆
+    insufficient_data」時才回報缺漏——單側 noncompressible 缺 TBI 時，
+    這一側其實無法判讀，卻因為另一側正常就整體回傳 COMPUTED + 沒有
+    missing_inputs + 「未達異常切點」，讓「這一側根本沒篩到」看起來像
+    「兩側都篩過、都正常」。"""
+    if evaluation.status != "insufficient_data":
+        return ()
+    if abi is None and tbi is None:
+        return (f"abi_{side}", f"tbi_{side}")
+    if abi is not None and tbi is None:
+        return (f"tbi_{side}",)
+    return ()
+
+
 class ABITBICalculator:
     calculator_id: ClassVar[str] = CALCULATOR_ID
     calculator_version: ClassVar[str] = CALCULATOR_VERSION
@@ -118,6 +134,11 @@ class ABITBICalculator:
             additional_evidence.append("ulcer present")
 
         abnormal = right.status == "abnormal" or left.status == "abnormal"
+        # ★ 修正（Codex #17）：單側 insufficient_data（如 ABI noncompressible
+        # 又缺 TBI）不可被另一側正常結果掩蓋——見 _side_missing_inputs()。
+        side_missing = _side_missing_inputs("right", inputs.abi_right, inputs.tbi_right, right) + _side_missing_inputs(
+            "left", inputs.abi_left, inputs.tbi_left, left
+        )
         warnings = []
         if right.status == "insufficient_data":
             warnings.append(right.detail)
@@ -132,6 +153,15 @@ class ABITBICalculator:
             if additional_evidence:
                 action += f"；已知附加證據: {', '.join(additional_evidence)}"
             action_grounded_in_spec = True
+        elif side_missing:
+            # 至少一側因缺資料無法判讀，另一側正常——不可回報成「兩側皆
+            # 篩過、皆未達異常切點」的乾淨陰性結果；clinical_status 留
+            # None（不冒充判讀），但透過 interpretation/missing_inputs 明確
+            # 標示這是不完整的單側篩檢。
+            clinical_status = None
+            interpretation = "PAD screening 不完整：至少一側因缺資料無法判讀，不可視為雙側皆已排除異常"
+            action = "補齊缺漏側之 ABI/TBI 後重新評估，該側 PAD 狀態目前無法排除"
+            action_grounded_in_spec = False
         else:
             clinical_status = None
             interpretation = "PAD screening 未達異常切點"
@@ -146,7 +176,7 @@ class ABITBICalculator:
             computed_at=inputs.as_of,
             execution_status=CalculatorExecutionStatus.COMPUTED,
             inputs=input_fields,
-            missing_inputs=(),
+            missing_inputs=side_missing,
             result_values={
                 "abi_right": inputs.abi_right,
                 "abi_left": inputs.abi_left,

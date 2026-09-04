@@ -66,6 +66,34 @@ def test_category3_pad_and_amputation_history():
     assert result.result_values["category"] == 3
 
 
+def test_unknown_high_risk_history_flags_possible_underestimation():
+    """回歸測試（Codex #18）：LOPS 存在但 ulcer/amputation/kidney_failure
+    病史皆未知時，先前只寫進 warnings 自由文字，missing_inputs 恆為空
+    tuple——若那些未知欄位其實為真，真實 Category 應是 3，卻因未知值被
+    當「無」算成 1。現在必須：① missing_inputs 結構化列出未知欄位；
+    ② interpretation 明確標示「可能被低估」，不可讓 Category 1 看起來
+    像已經排除高風險病史。"""
+    result = calc.compute(
+        IWGDFFootInputs(patient_id="P1", as_of=AS_OF, lops_present=True, pad_present=False)
+    )
+    assert result.result_values["category"] == 1  # 未知值保守處理為「無」，算出的分類本身不變
+    assert set(result.missing_inputs) == {
+        "foot_deformity_present",
+        "previous_foot_ulcer",
+        "previous_amputation",
+        "kidney_failure_present",
+    }
+    assert "低估" in result.interpretation
+
+
+def test_category0_no_missing_inputs_when_no_lops_or_pad():
+    """正向對照：無 LOPS/PAD 時，即使高風險病史欄位未知，也不會被低估
+    （Category 3 的前提本來就需要 LOPS 或 PAD），不應誤觸發低估警示。"""
+    result = calc.compute(IWGDFFootInputs(patient_id="P1", as_of=AS_OF, lops_present=False, pad_present=False))
+    assert result.result_values["category"] == 0
+    assert "低估" not in result.interpretation
+
+
 def test_overdue_uses_upper_bound_of_interval_and_sets_care_gap():
     _, upper = IWGDF_FOLLOWUP_INTERVAL_DAYS[1]
     last_eval = AS_OF - timedelta(days=upper + 1)

@@ -129,8 +129,16 @@ class IWGDFFootRiskCalculator:
             )
 
         warnings: list[str] = []
+        # ★ 修正（Codex #18）：先前這幾個欄位缺值時只寫進 warnings（自由
+        # 文字），missing_inputs 卻恆為空 tuple——任何依結構化 missing_inputs
+        # 判斷「資料是否齊全」的下游消費者（而非解析 warnings 文字）完全
+        # 看不出這個 Category 是在關鍵決定因子未知的情況下算出來的。若
+        # LOPS/PAD 存在但 ulcer/amputation/kidney_failure 未知，真實
+        # Category 可能是 3（高風險），卻因未知值被當「無」而算成 1 或 2。
+        unknown_determinants: list[str] = []
         for name in ("foot_deformity_present", "previous_foot_ulcer", "previous_amputation", "kidney_failure_present"):
             if getattr(inputs, name) is None:
+                unknown_determinants.append(name)
                 warnings.append(f"{name} 未評估，Category 判定可能低估（保守處理為『無』，見 open_questions#8）")
 
         category = _determine_category(inputs)
@@ -151,6 +159,15 @@ class IWGDFFootRiskCalculator:
         if overdue:
             result_summary += "；Status = overdue"
 
+        # 是否有機會被低估：LOPS/PAD 至少一項存在、且高風險病史欄位至少
+        # 一項未知——此時若那筆未知欄位其實為真，Category 應為 3。
+        category_possibly_underestimated = bool(unknown_determinants) and (
+            bool(inputs.lops_present) or bool(inputs.pad_present)
+        ) and category < 3
+        interpretation = f"IWGDF Category {category}"
+        if category_possibly_underestimated:
+            interpretation += "（★ 未知：ulcer/amputation/kidney_failure 病史未全部評估，實際 Category 可能被低估，見 missing_inputs）"
+
         if overdue:
             clinical_status = ClinicalStatus.CARE_GAP
             action = f"逾期未評估足部風險，依 Category {category} 建議追蹤頻率 {interval_min}-{interval_max} 天，請安排足部評估"
@@ -160,6 +177,8 @@ class IWGDFFootRiskCalculator:
         else:
             clinical_status = None
             action = f"依 IWGDF Category {category}，建議追蹤頻率 {interval_min}-{interval_max} 天"
+        if category_possibly_underestimated:
+            action += "；請補齊 ulcer/amputation/kidney_failure 病史後重新評估，目前 Category 可能低估"
 
         return CalculatorResult(
             calculator_id=self.calculator_id,
@@ -169,7 +188,7 @@ class IWGDFFootRiskCalculator:
             computed_at=inputs.as_of,
             execution_status=CalculatorExecutionStatus.COMPUTED,
             inputs=input_fields,
-            missing_inputs=(),
+            missing_inputs=tuple(unknown_determinants),
             result_values={
                 "category": category,
                 "interval_days_min": interval_min,
@@ -178,7 +197,7 @@ class IWGDFFootRiskCalculator:
                 "days_since_last_eval": days_since_last_eval,
             },
             result_summary=result_summary,
-            interpretation=f"IWGDF Category {category}",
+            interpretation=interpretation,
             action=action,
             clinical_status=clinical_status,
             guideline=GUIDELINE_ID,
