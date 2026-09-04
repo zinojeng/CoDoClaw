@@ -180,6 +180,11 @@ def to_audit_trail(record: PhysicianDecisionRecord) -> list[dict]:
                 "status": decision.status.value,
                 "modified_action_text": decision.modified_action_text,
                 "decline_reason": decision.decline_reason,
+                # ★ 修正（Codex #26）：decline_category（not_applicable/
+                # contraindicated/other，UI 三按鈕對應值）先前完全沒有
+                # 序列化進稽核軌跡，讓「醫師婉拒此建議的分類」這項稽核
+                # 上重要的資訊在稽核紀錄裡消失。
+                "decline_category": decision.decline_category,
                 "physician_id": decision.physician_id,
                 "decided_at": decision.decided_at.isoformat() if decision.decided_at else None,
                 "free_text_note": decision.free_text_note,

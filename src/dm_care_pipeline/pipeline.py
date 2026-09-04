@@ -75,7 +75,12 @@ from .medication_intelligence import (
     build_medication_check_input,
     build_medication_intelligence_report,
 )
-from .physician_decision import DecisionValidationError, PhysicianDecisionRecord, present_for_decision
+from .physician_decision import (
+    DecisionValidationError,
+    PhysicianDecisionRecord,
+    PhysicianDecisionStatus,
+    present_for_decision,
+)
 from .pipeline_models import ClinicalProfileConfig, PatientClinicalProfile
 from .pre_visit_brief import PreVisitDiabetesBrief, generate_pre_visit_brief
 from .risk import RiskAssessmentResult, RiskCalculator, RiskCalculatorConfig, assess_risk
@@ -768,17 +773,43 @@ def finalize_pipeline(
     `run_result.profile`/`run_result.complication_report` 混合產生衛教/
     追蹤計畫，形成跨病人資料汙染且無任何錯誤提示。現在顯式檢查
     `patient_id`/`as_of_date` 是否一致，不一致直接 raise，拒絕靜默混用
-    （鐵律5/鐵律6：資料不一致必須顯式失敗，不可靜默假設）。"""
+    （鐵律5/鐵律6：資料不一致必須顯式失敗，不可靜默假設）。
+
+    ★ 修正（Codex #25）：patient_id/as_of_date 相同不代表這份
+    `decision_record` 真的對應本次 `run_result` 產生的建議——兩次不同
+    input 資料的 pipeline 執行，只要病人與評估日相同，理論上就能通過上面
+    的檢查，卻可能是完全不同的一組建議（recommendation_id 集合不同）。
+    加驗 `presented_recommendations` 的 recommendation_id 集合是否與
+    `run_result.decision_record`（本次真正產生的建議）一致。另外，本函式
+    先前完全不檢查 `record.is_fully_reviewed()`——鐵律3的精神是「醫師完成
+    決策後才呼叫本函式」，若仍有 PENDING 建議就 finalize，衛教/追蹤計畫
+    只會反映已決策的子集，卻沒有任何訊號告知呼叫端還有建議未經醫師決策，
+    等於讓部分建議在醫師不知情的情況下被靜默略過。"""
     record = decision_record if decision_record is not None else run_result.decision_record
-    if decision_record is not None and (
-        decision_record.patient_id != run_result.profile.patient_id
-        or decision_record.as_of_date != run_result.profile.as_of_date
-    ):
+    if decision_record is not None:
+        if decision_record.patient_id != run_result.profile.patient_id or decision_record.as_of_date != run_result.profile.as_of_date:
+            raise DecisionValidationError(
+                f"finalize_pipeline(): 傳入的 decision_record（patient_id={decision_record.patient_id!r}, "
+                f"as_of_date={decision_record.as_of_date!r}）與 run_result.profile"
+                f"（patient_id={run_result.profile.patient_id!r}, as_of_date={run_result.profile.as_of_date!r}）"
+                "不一致，拒絕混用不同病人/評估基準日的資料"
+            )
+        expected_ids = {rec.recommendation_id for rec in run_result.decision_record.presented_recommendations}
+        actual_ids = {rec.recommendation_id for rec in decision_record.presented_recommendations}
+        if actual_ids != expected_ids:
+            raise DecisionValidationError(
+                "finalize_pipeline(): 傳入的 decision_record 之 recommendation_id 集合與本次 "
+                "run_result 產生的建議不一致（patient_id/as_of_date 相同不代表是同一組建議）——"
+                f"缺少: {sorted(expected_ids - actual_ids)}；多出: {sorted(actual_ids - expected_ids)}"
+            )
+    if not record.is_fully_reviewed():
+        pending_ids = sorted(
+            rec_id for rec_id, decision in record.decisions.items() if decision.status == PhysicianDecisionStatus.PENDING
+        )
         raise DecisionValidationError(
-            f"finalize_pipeline(): 傳入的 decision_record（patient_id={decision_record.patient_id!r}, "
-            f"as_of_date={decision_record.as_of_date!r}）與 run_result.profile"
-            f"（patient_id={run_result.profile.patient_id!r}, as_of_date={run_result.profile.as_of_date!r}）"
-            "不一致，拒絕混用不同病人/評估基準日的資料"
+            f"finalize_pipeline(): 仍有 {len(pending_ids)} 筆建議待決策（PENDING），"
+            f"不可 finalize：{pending_ids}。鐵律3：醫師完成全部決策後才呼叫本函式，"
+            "不可讓未決策的建議在衛教/追蹤計畫中被靜默略過"
         )
 
     education_plan = select_education_topics(record, run_result.complication_report, education_config)

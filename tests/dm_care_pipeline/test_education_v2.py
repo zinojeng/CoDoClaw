@@ -192,6 +192,26 @@ def test_today_actions_includes_accepted_recommendations_and_pending_orders():
     assert any("FIBROSCAN" in a for a in report.today_actions)
 
 
+def test_today_actions_uses_modified_action_text_not_original_title():
+    """回歸測試（Codex #27）：status==MODIFIED 時，先前 today_actions 一律
+    顯示原始建議的 rec.title，即使醫師已經修改成別的內容——病人衛教內容
+    會顯示醫師「已修改但從未真正採用」的原始建議，而非醫師實際核可的
+    modified_action_text。"""
+    clinical_state = empty_clinical_state()
+    profile, complication_report = _profile_and_complication_report()
+    decision_record = present_for_decision([_med_rec()], patient_id="P1", as_of_date=AS_OF)
+    decision_record.record_decision(
+        PhysicianDecision(
+            recommendation_id="R1",
+            status=PhysicianDecisionStatus.MODIFIED,
+            modified_action_text="改開 GLP-1 RA 而非 SGLT2i",
+        )
+    )
+    report = generate_patient_education_report(clinical_state, _empty_trend_report(), complication_report, decision_record)
+    assert any("改開 GLP-1 RA 而非 SGLT2i" in a for a in report.today_actions)
+    assert not any("Kidney-protective" in a for a in report.today_actions)
+
+
 def test_completed_pending_order_not_listed_as_today_action():
     clinical_state = empty_clinical_state()
     profile, complication_report = _profile_and_complication_report()

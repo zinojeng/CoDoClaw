@@ -81,6 +81,26 @@ def test_decline_category_can_be_set_for_declined_status():
     assert decision.decline_category == "not_applicable"
 
 
+def test_to_audit_trail_includes_decline_category():
+    """回歸測試（Codex #26）：`to_audit_trail()` 先前完全沒有序列化
+    `decline_category`（not_applicable/contraindicated/other），讓「醫師
+    婉拒此建議的分類」這項稽核上重要的資訊在稽核紀錄裡消失。"""
+    from dm_care_pipeline.physician_decision import to_audit_trail
+
+    rec = _med_rec("R1")
+    record = present_for_decision([rec], patient_id="P1", as_of_date=AS_OF)
+    record.record_decision(
+        PhysicianDecision(
+            recommendation_id="R1",
+            status=PhysicianDecisionStatus.DECLINED,
+            decline_reason="病人已使用其他替代藥物",
+            decline_category="contraindicated",
+        )
+    )
+    trail = to_audit_trail(record)
+    assert trail[0]["decline_category"] == "contraindicated"
+
+
 # ---------------------------------------------------------------------------
 # present_for_decision() 型別放寬
 # ---------------------------------------------------------------------------

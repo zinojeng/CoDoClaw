@@ -30,7 +30,9 @@ from dm_care_pipeline.clinical_data_object import ClinicalDomain
 from dm_care_pipeline.data_integration import build_patient_clinical_profile
 from dm_care_pipeline.followup import PendingOrder
 from dm_care_pipeline.physician_decision import (
+    DecisionValidationError,
     PhysicianDecision,
+    PhysicianDecisionRecord,
     PhysicianDecisionStatus,
     Reviewable,
 )
@@ -481,9 +483,39 @@ def test_finalize_pipeline_with_order_source_populates_pending_orders():
 def test_backward_compatible_v1_style_call_still_works():
     """v1 呼叫端零改動即可運作：不傳任何 v2 新參數。"""
     run_result = _run()
+    for rec in run_result.decision_record.presented_recommendations:
+        run_result.decision_record.record_decision(
+            PhysicianDecision(recommendation_id=rec.recommendation_id, status=PhysicianDecisionStatus.ACCEPTED, physician_id="DOC1")
+        )
     final_result = finalize_pipeline(run_result)
     assert final_result.followup_plan.next_recommended_visit_date >= AS_OF
     assert isinstance(final_result.education_plan.topics, list)
+
+
+def test_finalize_pipeline_rejects_unreviewed_pending_recommendations():
+    """回歸測試（Codex #25）：`finalize_pipeline()` 先前完全不檢查
+    `record.is_fully_reviewed()`——仍有 PENDING 建議時 finalize，衛教/
+    追蹤計畫只會反映已決策的子集，卻沒有任何訊號告知呼叫端還有建議未經
+    醫師決策。"""
+    run_result = _run()
+    with pytest.raises(DecisionValidationError, match="PENDING"):
+        finalize_pipeline(run_result)
+
+
+def test_finalize_pipeline_rejects_decision_record_with_different_recommendation_ids():
+    """回歸測試（Codex #25）：先前只驗證顯式傳入的 decision_record 與
+    run_result.profile 的 patient_id/as_of_date 相同，卻不驗證
+    recommendation_id 集合——同一位病人、同一評估日，但來自另一次不同
+    input 資料的 pipeline 執行（因此建議內容完全不同）的 decision_record
+    仍會被接受並直接混用。"""
+    run_result = _run()
+    unrelated_record = PhysicianDecisionRecord(
+        patient_id=run_result.profile.patient_id,
+        as_of_date=run_result.profile.as_of_date,
+        presented_recommendations=(),
+    )
+    with pytest.raises(DecisionValidationError, match="recommendation_id 集合"):
+        finalize_pipeline(run_result, unrelated_record)
 
 
 def test_layer1_data_actually_reaches_calculators_via_run_stages_1_to_7():

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 
 from .clinical_data_object import ClinicalDomain, ClinicalStatus
 from .complication_identification import ComplicationReport
-from .physician_decision import PhysicianDecisionRecord
+from .physician_decision import PhysicianDecisionRecord, PhysicianDecisionStatus
 from .trend_analysis import ClinicalTrendReport, TrendDirection
 
 if TYPE_CHECKING:  # pragma: no cover - 型別提示用，避免執行期循環 import
@@ -323,7 +323,15 @@ def generate_patient_education_report(
 
     today_actions: list[str] = []
     for rec, decision in decision_record.accepted_or_modified():
-        today_actions.append(f"醫師已{decision.status.value}：{rec.title}")
+        # ★ 修正（Codex #27）：status==MODIFIED 時，醫師實際決定的內容是
+        # `decision.modified_action_text`（必填欄位，見 record_decision()
+        # 驗證），不是原始建議的 `rec.title`——先前不論 ACCEPTED 或
+        # MODIFIED 一律顯示 rec.title，等於病人衛教內容會顯示醫師「已修改
+        # 但從未真正採用」的原始建議，而非醫師實際核可的內容。
+        if decision.status == PhysicianDecisionStatus.MODIFIED and decision.modified_action_text:
+            today_actions.append(f"醫師已{decision.status.value}：{decision.modified_action_text}")
+        else:
+            today_actions.append(f"醫師已{decision.status.value}：{rec.title}")
     for order in pending_orders:
         # ★ 修正（Codex 審閱發現）：原本「非COMPLETED即視為待完成」會把
         # CANCELLED（已取消）也顯示成「待完成醫令」，誤導病人以為還有事要做。
