@@ -86,11 +86,17 @@ def _default_markers() -> dict[str, TrendMarkerDefinition]:
         # HBA1C/LDL 的 item_codes 為規格書明文醫令碼（rules_p14.P1407_LAB_REQUIREMENTS_BASE）。
         "HBA1C": TrendMarkerDefinition("HBA1C", ("09006C",), higher_is_worse=True, good_threshold=7.0, bad_threshold=9.0),
         "LDL": TrendMarkerDefinition("LDL", ("09044C",), higher_is_worse=True, good_threshold=100.0, bad_threshold=130.0),
-        # TODO：規格書無 eGFR/血壓的收案專用醫令碼可依循（P14/P7 spec 只在
-        # CKD分期脈絡下提及 eGFR 數值本身，未提供檢驗醫令代碼）。以下為
-        # placeholder 字串，需與 HIS 介接確認實際 item_code（見架構文件
-        # 第8節第4項待人工協調事項）。
-        "EGFR": TrendMarkerDefinition("EGFR", ("EGFR",), higher_is_worse=False),
+        # ★ 修正（OpenClaw HIS §11 Component B）：先前這裡有一個 "EGFR"
+        # marker，item_codes 是佔位字串 "EGFR"（規格書無 eGFR 專屬醫令
+        # 代碼可依循），永遠無法比對到 `lab_series_by_item` 的真實資料，
+        # 形同一個看起來存在、實際上永遠回傳 INSUFFICIENT_DATA 的死路徑。
+        # eGFR/UACR 在本管線是透過 `dm_eligibility.CKDAssessment` 結構化
+        # 欄位取得（非泛用 LIS item_code 掃描），改由 `ckd_progression.
+        # analyze_ckd_progression()` 使用同一套方向性/斜率演算法（鐵律7）
+        # 從 `profile.enrollment_state.ckd_assessments` 讀取真實數值。
+        # TODO：血壓（SBP/DBP）同樣是佔位字串，尚未接上
+        # `profile.vital_signs`（risk.py 的 `_latest_bp()` 已示範類似做
+        # 法），留待後續一併處理。
         "SBP": TrendMarkerDefinition("SBP", ("SBP",), higher_is_worse=True),
         "DBP": TrendMarkerDefinition("DBP", ("DBP",), higher_is_worse=True),
     }

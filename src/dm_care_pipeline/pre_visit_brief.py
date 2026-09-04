@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Mapping, Optional
+from typing import TYPE_CHECKING, Mapping, Optional, Sequence
 
 from .alert import AlertReport, classify_alert_batch
 from .clinical_data_object import ClinicalDomain, ClinicalFinding
@@ -26,6 +26,7 @@ if TYPE_CHECKING:  # pragma: no cover - 型別提示用，避免執行期循環 
     from .alert import AlertClassificationConfig
     from .calculators.base import CalculatorResult
     from .care_gap_clocks import CareGapAgentReport
+    from .ckd_progression import CKDProgressionReport
     from .clinical_state import PatientClinicalState
     from .guideline_recommendation import GuidelineRecommendationReport
     from .physician_decision import PhysicianDecision, PhysicianDecisionRecord
@@ -65,7 +66,13 @@ class PreVisitDiabetesBrief:
     data_gaps: tuple["DataGapFlag", ...]
 
 
-def _build_today_widget(trend_report: "ClinicalTrendReport") -> dict[str, TodayMetric]:
+def _build_today_widget(marker_trends: Sequence[MarkerTrend]) -> dict[str, TodayMetric]:
+    """★ 修正（OpenClaw HIS §22 Widget 1 — Today）：規格明文 Widget 1 應
+    包含 HbA1c/BP/Weight/LDL/eGFR/UACR，先前只吃 `trend_report.
+    marker_trends`（僅 HbA1c/LDL），eGFR/UACR 完全不會出現在 Widget 1。
+    改為接受任意 `MarkerTrend` 序列，呼叫端負責把
+    `ckd_progression_report` 的 eGFR/UACR trend 併入（見
+    `generate_pre_visit_brief()`）。"""
     return {
         mt.marker_name: TodayMetric(
             marker_name=mt.marker_name,
@@ -74,7 +81,7 @@ def _build_today_widget(trend_report: "ClinicalTrendReport") -> dict[str, TodayM
             direction=mt.direction,
             control_tier=mt.control_tier,
         )
-        for mt in trend_report.marker_trends
+        for mt in marker_trends
     }
 
 
@@ -115,6 +122,7 @@ def generate_pre_visit_brief(
     decision_record: "PhysicianDecisionRecord",
     alert_config: Optional["AlertClassificationConfig"] = None,
     care_gap_agent_report: Optional["CareGapAgentReport"] = None,
+    ckd_progression_report: Optional["CKDProgressionReport"] = None,
 ) -> PreVisitDiabetesBrief:
     """純組裝函式：`complication_map` 直接取
     `clinical_state.domain_summaries`（不重新計算紅黃綠三色）；
@@ -142,7 +150,15 @@ def generate_pre_visit_brief(
     保持既有呼叫端零改動；提供時只併入標記給本站
     （"pre_visit_brief" in relevant_downstream_stages）的項目，並依
     source 去重，避免與 clinical_state.data_gaps 中可能已存在的同一筆
-    缺漏重複列出。"""
+    缺漏重複列出。
+
+    ★ 新增（OpenClaw HIS §11 Component B / §22 Widget 1-2）：規格明文
+    Widget 1（Today）與 Widget 2（3-Year Trend）皆應包含 eGFR/UACR，
+    先前 `today_widget`/`trend_widget` 只吃 `trend_report.marker_trends`
+    （僅 HbA1c/LDL）。`ckd_progression_report`（`ckd_progression.
+    analyze_ckd_progression()` 輸出）提供時，其 `egfr_trend`/`uacr_trend`
+    併入這兩個 widget；keyword-only 選填、預設 None 以保持既有呼叫端零
+    改動。"""
     evidence_index = {f.finding_id: f for f in clinical_state.findings}
     # ★ 修正（Codex #30）：明確傳入 patient_id/as_of_date（本函式已有的
     # profile 欄位），不讓 classify_alert_batch() 從 findings[0] 的證據
@@ -163,12 +179,17 @@ def generate_pre_visit_brief(
                 data_gaps.append(gap)
                 seen_sources.add(gap.source)
 
+    all_marker_trends = list(trend_report.marker_trends)
+    if ckd_progression_report is not None:
+        all_marker_trends.append(ckd_progression_report.egfr_trend)
+        all_marker_trends.append(ckd_progression_report.uacr_trend)
+
     return PreVisitDiabetesBrief(
         patient_id=profile.patient_id,
         as_of_date=profile.as_of_date,
         generated_at=datetime.now(),
-        today_widget=_build_today_widget(trend_report),
-        trend_widget=tuple(trend_report.marker_trends),
+        today_widget=_build_today_widget(all_marker_trends),
+        trend_widget=tuple(all_marker_trends),
         complication_map=_build_complication_map(clinical_state),
         advanced_risk_widget=tuple(calculator_results.values()),
         guideline_gap_widget=_build_guideline_gap_widget(decision_record),

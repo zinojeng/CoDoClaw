@@ -84,6 +84,7 @@ from .physician_decision import (
 from .pipeline_models import ClinicalProfileConfig, PatientClinicalProfile
 from .pre_visit_brief import PreVisitDiabetesBrief, generate_pre_visit_brief
 from .risk import RiskAssessmentResult, RiskCalculator, RiskCalculatorConfig, assess_risk
+from .ckd_progression import CKDProgressionConfig, CKDProgressionReport, analyze_ckd_progression
 from .trend_analysis import ClinicalTrendConfig, ClinicalTrendReport, analyze_clinical_trends
 
 # ---------------------------------------------------------------------------
@@ -550,6 +551,7 @@ class PipelineRunResult:
 
     profile: PatientClinicalProfile
     trend_report: ClinicalTrendReport
+    ckd_progression_report: CKDProgressionReport  # ★ 新增（OpenClaw HIS §11 Component B）
     complication_report: ComplicationReport
     risk_result: RiskAssessmentResult
     calculator_results: dict[str, CalculatorResult]  # v2新增
@@ -575,6 +577,7 @@ def run_stages_1_to_7(
     risk_calculator: RiskCalculator | None = None,
     risk_config: RiskCalculatorConfig | None = None,
     care_gap_config: EligibilityConfig | None = None,
+    ckd_progression_config: CKDProgressionConfig | None = None,  # ★ 新增（OpenClaw HIS §11 Component B）
     include_quality_monitoring: bool = True,
     guideline_rules: Sequence[RecommendationRule] | None = None,
     # ↓ v2 新增，皆有預設值（架構文件v2 3.14節）↓
@@ -650,6 +653,12 @@ def run_stages_1_to_7(
         sex=sex,
     )
     trend_report = analyze_clinical_trends(profile, trend_config)
+    # ★ 新增（OpenClaw HIS §11 Component B）：eGFR/UACR 縱向趨勢——與
+    # HbA1c/LDL 共用同一組取樣參數（見 CKDProgressionConfig.
+    # from_trend_config()），確保「多少個點才夠判斷趨勢」全管線一致。
+    ckd_progression_report = analyze_ckd_progression(
+        profile, ckd_progression_config or CKDProgressionConfig.from_trend_config(trend_config or ClinicalTrendConfig())
+    )
     complication_report = identify_complications(profile, complication_config)
     risk_result = assess_risk(profile, trend_report, complication_report, calculator=risk_calculator, config=risk_config)
 
@@ -725,11 +734,13 @@ def run_stages_1_to_7(
         decision_record,
         alert_config=alert_config,
         care_gap_agent_report=care_gap_agent_report,  # ★ 修正（Codex #29）
+        ckd_progression_report=ckd_progression_report,  # ★ 新增（OpenClaw HIS §11 Component B）
     )
 
     return PipelineRunResult(
         profile=profile,
         trend_report=trend_report,
+        ckd_progression_report=ckd_progression_report,
         complication_report=complication_report,
         risk_result=risk_result,
         calculator_results=calculator_results,

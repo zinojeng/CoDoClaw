@@ -370,6 +370,41 @@ def test_pre_visit_brief_assembled_from_same_run():
     assert brief.advanced_risk_widget == tuple(run_result.calculator_results.values())
 
 
+def test_ckd_progression_report_computed_and_wired_into_widgets():
+    """新增（OpenClaw HIS §11 Component B / §22 Widget 1-2）：eGFR/UACR
+    縱向趨勢應隨 `run_stages_1_to_7()` 一起算出，並出現在
+    pre_visit_brief 的 Widget 1（today_widget）與 Widget 2
+    （trend_widget），不是只算出來卻沒人消費（比照 Codex #29 的教訓）。"""
+    run_result = _run()
+    assert run_result.ckd_progression_report.patient_id == "P1"
+    assert run_result.ckd_progression_report.as_of_date == AS_OF
+
+    brief = run_result.pre_visit_brief
+    assert "EGFR" in brief.today_widget
+    assert "UACR" in brief.today_widget
+    trend_marker_names = {mt.marker_name for mt in brief.trend_widget}
+    assert {"EGFR", "UACR"} <= trend_marker_names
+
+
+def test_ckd_progression_detects_declining_egfr_end_to_end():
+    """端到端版本的 eGFR 連續下降偵測（單元測試見
+    test_ckd_progression.py），確認 pipeline.py 真的把
+    `ckd_progression_config` 接上 `analyze_ckd_progression()`。"""
+    state = full_fixture_state()
+    state.ckd_assessments = [
+        CKDAssessment(AS_OF - timedelta(days=270), egfr=71.0, uacr=42.0, is_diabetic=True),
+        CKDAssessment(AS_OF - timedelta(days=180), egfr=65.0, uacr=89.0, is_diabetic=True),
+        CKDAssessment(AS_OF - timedelta(days=90), egfr=59.0, uacr=176.0, is_diabetic=True),
+        CKDAssessment(AS_OF, egfr=52.0, uacr=332.0, is_diabetic=True),
+    ]
+    physician = PhysicianStatus(physician_id="DOC1", is_dm_ckd_dual_qualified=True)
+    eligibility_report = EligibilityEngine().evaluate(state, physician)
+    run_result = run_stages_1_to_7(state, eligibility_report=eligibility_report, physician=physician)
+
+    assert run_result.ckd_progression_report.egfr_trend.is_consecutively_worsening is True
+    assert run_result.ckd_progression_report.uacr_trend.is_consecutively_worsening is True
+
+
 def test_pre_visit_brief_includes_care_gap_clock_data_gaps():
     """回歸測試（Codex #29）：`care_gap_agent_report.data_gaps`（Clinical/
     Patient-Specific Clock「查無任何執行紀錄」）明確標記
