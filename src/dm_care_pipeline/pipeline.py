@@ -305,7 +305,7 @@ def _build_watch_dm_inputs(profile: PatientClinicalProfile) -> WatchDmInputs:
         bmi=vital.bmi if vital else None,
         systolic_bp=vital.systolic_bp if vital else None,
         diastolic_bp=vital.diastolic_bp if vital else None,
-        creatinine=None,  # Part1 CKDAssessment 只存 egfr，不存原始肌酸酐數值
+        creatinine=None,  # dm_eligibility CKDAssessment 只存 egfr，不存原始肌酸酐數值
         hdl_c=hdl,
         fasting_plasma_glucose=fpg,
         qrs_duration_ms=cardiac.qrs_duration_ms if cardiac else None,

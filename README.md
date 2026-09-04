@@ -2,7 +2,7 @@
 
 **一句話說明**：輸入一位糖尿病病人的就診/檢驗/用藥歷史，這條管線依序算出檢驗趨勢、辨識併發症、估算風險、抓出照護缺口，產生「每條都附明確依據」的臨床建議與藥物治療缺口建議，交給醫師逐筆採納/修改/婉拒，再依醫師的決定產出病人衛教內容與下一次回診排程。
 
-本專案依 `OpenClaw for Diabetes HIS.md` 設計，是 [diabetes_P4P](https://github.com/zinojeng/diabetes_P4P) 的 **Part 2**。
+本專案依 `OpenClaw for Diabetes HIS.md` 設計。
 
 ## 這個 repo 是什麼、不是什麼
 
@@ -19,48 +19,35 @@
   〈使用前必讀〉。
 - ❌ 不是：自動診療或自動開藥系統。見下方各層的鐵律說明。
 
-## 與 diabetes_P4P（Part 1）的關係
-
-| Repo | 內容 | 狀態 |
-|---|---|---|
-| [**diabetes_P4P**](https://github.com/zinojeng/diabetes_P4P) | Part 1：P14/P7 收案資格判斷引擎（`dm_eligibility`） | 那裡是唯一維護版本 |
-| **本 repo**（CoDoClaw） | Part 2：臨床決策支援管線（`dm_care_pipeline`） | 這裡是唯一維護版本 |
-
-本 repo 的 `src/dm_eligibility/` 是**唯讀複本**，附帶目的是讓本 repo
-能獨立 clone、安裝、測試——因為 `dm_care_pipeline` 的九站流程直接以
-Part 1 的 `PatientEnrollmentState`/`EligibilityReport` 為輸入，兩者無法
-拆開運作。**Part 1 的規則異動一律以 diabetes_P4P repo 為準**，本 repo
-不會主動修改 `dm_eligibility/` 的邏輯，只在需要同步上游變更時更新複本。
-
 ## 目錄結構
 
 ```
 CoDoClaw/
 ├── README.md                        本文件
 ├── requirements.txt                  最小相依套件（pytest）
-├── OpenClaw for Diabetes HIS.md      Part 2 設計所依據的原始規格文件
+├── OpenClaw for Diabetes HIS.md      設計所依據的原始規格文件
 ├── spec/
-│   ├── P14_rules_spec.md              P14 收案規則規格書（Part 1 依據，附帶供追溯）
-│   └── P7_rules_spec.md               P7 收案規則規格書（Part 1 依據，附帶供追溯）
+│   ├── P14_rules_spec.md              P14 收案規則規格書（供追溯）
+│   └── P7_rules_spec.md               P7 收案規則規格書（供追溯）
 ├── docs/
-│   ├── 系統設計說明.md                  Part 1 架構說明
-│   ├── 臨床決策支援管線設計.md            Part 2 v1 九站骨架設計文件
-│   └── 臨床決策支援管線設計_v2_OpenClaw.md  Part 2 v2 擴充架構文件（六段設計整合裁定）
+│   ├── 系統設計說明.md                  dm_eligibility 架構說明
+│   ├── 臨床決策支援管線設計.md            九站骨架設計文件
+│   └── 臨床決策支援管線設計_v2_OpenClaw.md  擴充架構文件（六段設計整合裁定）
 ├── src/
-│   ├── dm_eligibility/                Part 1（唯讀複本，見上方關係說明）
-│   └── dm_care_pipeline/              Part 2：臨床決策支援管線（本 repo 主體，34個檔案）
+│   ├── dm_eligibility/                收案資格判斷引擎（提供 dm_care_pipeline 所需的輸入型別）
+│   └── dm_care_pipeline/              臨床決策支援管線（本 repo 主體，34個檔案）
 └── tests/
     ├── conftest.py
-    ├── test_engine.py                 Part 1 測試
-    ├── test_care_pipeline.py          Part 2 v1 測試
-    └── dm_care_pipeline/              Part 2 v2 測試（21個檔案）
+    ├── test_engine.py                 dm_eligibility 測試
+    ├── test_care_pipeline.py          dm_care_pipeline 骨架測試
+    └── dm_care_pipeline/              dm_care_pipeline 完整測試（21個檔案）
 ```
 
 ## 快速開始
 
 ```bash
 pip install -r requirements.txt
-pytest tests/ -q   # 319 個測試
+pytest tests/ -q   # 324 個測試
 ```
 
 ## 架構：Layer 1-7 + Calculator Service
@@ -68,11 +55,11 @@ pytest tests/ -q   # 319 個測試
 九站流程：資料整合 → 臨床趨勢分析 → 併發症辨識 → 風險計算 → Care Gap
 分析 → Guideline Recommendation（含藥物治療缺口建議）→ 醫師決策 → 病人
 衛教 → 後續追蹤——最後把回診日期回饋成下一輪 `PatientEnrollmentState`，
-重新餵回 Part 1 的 `EligibilityEngine.evaluate()`，形成一個可持續運作的
+重新餵回 `dm_eligibility` 的 `EligibilityEngine.evaluate()`，形成一個可持續運作的
 封閉迴圈。下圖是資料流（非文字順序，而是實際依賴關係）：
 
 ```
-Part 1（凍結，只 reuse 不改）
+dm_eligibility（凍結，只 reuse 不改）
   PatientEnrollmentState ──▶ EligibilityEngine.evaluate() ──▶ EligibilityReport
                                         │
                                         ▼
@@ -110,7 +97,7 @@ guideline_recommendation.py  medication_intelligence.py    care_gap_clocks.py
                                                                      │
                                                                      ▼
                                               下一輪 PatientEnrollmentState
-                                              → 回到 Part 1（封閉迴圈）
+                                              → 回到 dm_eligibility（封閉迴圈）
 ```
 
 ### 模組對照
@@ -151,7 +138,7 @@ src/dm_care_pipeline/
 
 ## ⚠️ 使用前必讀：placeholder 與需臨床覆核事項
 
-Part 2 大量使用「規格書沒有明文、但決策支援管線需要」的數值與邏輯，皆已
+本 repo 大量使用「規格書沒有明文、但決策支援管線需要」的數值與邏輯，皆已
 用具名 `Config` 欄位 + 程式碼註解明確標示 `★`，**不可直接視為已驗證的
 臨床規則上線使用**。重點包括（完整清單見
 `docs/臨床決策支援管線設計_v2_OpenClaw.md` 第5節 open_questions）：

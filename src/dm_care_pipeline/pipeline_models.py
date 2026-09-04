@@ -8,7 +8,7 @@ import 時混淆。
 
 設計原則（沿用 `dm_eligibility/models.py` 既有風格）：
 - `PatientClinicalProfile` 是唯讀、自我完備的物件，composition 持有
-  `enrollment_state: PatientEnrollmentState`（Part1 物件參照，不複製欄位）。
+  `enrollment_state: PatientEnrollmentState`（dm_eligibility 物件參照，不複製欄位）。
 - 任何「資料不足/依據不足」一律透過 `DataGapFlag` / `integration_warnings`
   顯式回報，不得靜默假設。
 """
@@ -58,7 +58,7 @@ class ClinicalProfileConfig:
     default_lab_staleness_days: int = 180  # TODO：品質監測四項以外檢驗項目，規格未定義，暫借用同一值
     diagnosis_lookback_days: int = 365  # TODO：規格書無此類概括回溯窗口，工程保守預設
     medication_lookback_days: int = 365  # TODO：同上
-    auto_run_eligibility_engine_if_missing: bool = False  # 工程決策：預設不代呼叫端觸發 Part1 引擎
+    auto_run_eligibility_engine_if_missing: bool = False  # 工程決策：預設不代呼叫端觸發 dm_eligibility 引擎
 
 
 @dataclass
@@ -70,7 +70,7 @@ class PatientClinicalProfile:
 
     patient_id: str
     as_of_date: date
-    enrollment_state: PatientEnrollmentState  # composition：直接持有 Part1 物件參照，不複製欄位
+    enrollment_state: PatientEnrollmentState  # composition：直接持有 dm_eligibility 物件參照，不複製欄位
     eligibility_report: Optional[EligibilityReport] = None
     physician: Optional[PhysicianStatus] = None
     eligibility_report_as_of_mismatch: bool = False

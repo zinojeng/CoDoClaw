@@ -1,5 +1,5 @@
 """
-【第1站】資料整合 — 把 Part1 的 `PatientEnrollmentState`（+ 可選的
+【第1站】資料整合 — 把 dm_eligibility 的 `PatientEnrollmentState`（+ 可選的
 `EligibilityReport`/`PhysicianStatus`）彙整成全管線唯一共同輸入
 `PatientClinicalProfile`。
 
@@ -84,7 +84,7 @@ def build_patient_clinical_profile(
 
     `eligibility_engine` 僅在 `eligibility_report is None` 且
     `config.auto_run_eligibility_engine_if_missing` 為 True 時才會被呼叫
-    （預設 False：不代呼叫端觸發 Part1 引擎，避免本函式產生非預期的
+    （預設 False：不代呼叫端觸發 dm_eligibility 引擎，避免本函式產生非預期的
     副作用性計算——是否要重新跑一次收案資格判斷，應由呼叫端顯式決定）。
     """
     cfg = config or ClinicalProfileConfig()

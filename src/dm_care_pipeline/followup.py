@@ -1,7 +1,7 @@
 """
 【第9站】後續追蹤 — 推算下一次應回診/複查日期，並生成「下一輪
 PatientEnrollmentState」可直接使用的 `next_recommended_visit_date`，
-串接回 Part1 `EligibilityEngine.evaluate()` 形成封閉迴圈。
+串接回 dm_eligibility 的 `EligibilityEngine.evaluate()` 形成封閉迴圈。
 
 重用 `rules_p14.check_stage2_entry_eligible()`、`rules_p7.
 P7001_FIRST_INTERVAL_DAYS`/`P7001_SUBSEQUENT_INTERVAL_DAYS`、

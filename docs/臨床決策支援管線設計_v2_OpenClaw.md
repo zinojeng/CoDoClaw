@@ -1,4 +1,4 @@
-# 糖尿病照護臨床決策支援管線（Part 2）— OpenClaw 擴充架構文件 v2.0
+# 糖尿病照護臨床決策支援管線 — OpenClaw 擴充架構文件 v2.0
 
 ## 0. 本文件與 v1 的關係
 
@@ -31,14 +31,14 @@ v1（`docs/臨床決策支援管線設計.md`）整合了「資料整合｜臨�
 4. 醫師決策/醫令變更走 Human-in-the-loop，無任何自動核准/自動下醫囑路徑。
 5. Guideline 一律走§15 版本化 Guideline Library，每條建議標明來源+版本+規格出處。
 6. 無法回溯規格書的假設一律用具名 Config + TODO 顯式標示，不靜默假設。
-7. 能重用既有程式（Part1 規則、v1 既有站點）一律重用，不重複實作。
+7. 能重用既有程式（dm_eligibility 規則、v1 既有站點）一律重用，不重複實作。
 
 ---
 
 ## 1. (a) 完整分層架構與資料流
 
 ```
-════════════════════════════ Part 1（凍結，只 reuse 不改）════════════════════════════
+════════════════════════════ dm_eligibility（凍結，只 reuse 不改）════════════════════════════
  HIS/病歷介接 → PatientEnrollmentState ──→ EligibilityEngine.evaluate() → EligibilityReport
 ════════════════════════════════════════════════════════════════════════════════════
                                     │ state, eligibility_report, physician
@@ -129,7 +129,7 @@ v1（`docs/臨床決策支援管線設計.md`）整合了「資料整合｜臨�
                                             └───────────────────────┬───────────────────────┘
                                                                     ▼
                                                 下一輪 PatientEnrollmentState(as_of_date=...)
-                                                → 回到 Part1 EligibilityEngine.evaluate()（封閉迴圈）
+                                                → 回到 dm_eligibility 的 EligibilityEngine.evaluate()（封閉迴圈）
 
 未實作、僅留介面（見第7節 MVP 邊界）：
   Population Health Agent（§29）— PopulationHealthAgent(Protocol) 佔位
@@ -180,7 +180,7 @@ v1（`docs/臨床決策支援管線設計.md`）整合了「資料整合｜臨�
 
 ```python
 # src/dm_care_pipeline/clinical_data_layer.py
-"""規格§3 Layer1 的 Part2 擴充：既有 dm_eligibility.models 未涵蓋的原始臨床
+"""規格§3 Layer1 的 dm_care_pipeline 擴充：既有 dm_eligibility.models 未涵蓋的原始臨床
 資料容器。全部 frozen；本檔案不做任何臨床判讀，只做資料到位與否的顯性標記。
 """
 
@@ -316,17 +316,17 @@ class AdministrativeCareStatus:
     dietitian_involved: Optional[bool] = None
     source: str = "ADMIN"
     # ckd_p4p_enrolled 刻意不重複維護：改由呼叫端讀
-    # profile.eligibility_report.eligible_codes() 推導（Part1 EligibilityReport
+    # profile.eligibility_report.eligible_codes() 推導（dm_eligibility EligibilityReport
     # 已是收案狀態的權威來源，見架構文件 §5 節整合原則）。
 
 @dataclass(frozen=True)
 class EncounterUtilizationRecord:
-    """★ 新增、平行於 Part1 `Encounter`（凍結，不修改）的「就醫場域分類」
+    """★ 新增、平行於 dm_eligibility `Encounter`（凍結，不修改）的「就醫場域分類」
     容器，供 Karter Hypoglycemia Tier B calculator 之
-    ed_visits_prior_12mo/prior_hypo_related_ed_or_hosp 使用。Part1
+    ed_visits_prior_12mo/prior_hypo_related_ed_or_hosp 使用。dm_eligibility
     `Encounter` 本身沒有門診/急診/住院分類欄位，這是唯讀的平行擴充，不改動
-    Part1 既有物件（見第4/5節 open_questions）。"""
-    encounter_id: str  # 建議與 Part1 Encounter.encounter_id 對應，供交叉核對
+    dm_eligibility 既有物件（見第4/5節 open_questions）。"""
+    encounter_id: str  # 建議與 dm_eligibility Encounter.encounter_id 對應，供交叉核對
     visit_date: date
     setting: Literal["outpatient", "ed", "inpatient"]
     hypoglycemia_related: Optional[bool] = None
@@ -350,7 +350,7 @@ class EncounterUtilizationRecord:
     sex: Optional[Literal["male", "female", "intersex_unspecified"]] = None
 ```
 
-`sex` 是本次整合唯一一個**不屬於 `clinical_data_layer.py` 型別、直接掛在 `PatientClinicalProfile` 上的新原始欄位**（PREVENT/Legacy ASCVD PCE/KFRE 皆需要，Part1/Part2 目前完全沒有這個欄位）；其定義（生理性別 vs 病歷登記性別）本身是待人工裁定事項，見第4節 open_questions。
+`sex` 是本次整合唯一一個**不屬於 `clinical_data_layer.py` 型別、直接掛在 `PatientClinicalProfile` 上的新原始欄位**（PREVENT/Legacy ASCVD PCE/KFRE 皆需要，dm_eligibility/dm_care_pipeline 目前完全沒有這個欄位）；其定義（生理性別 vs 病歷登記性別）本身是待人工裁定事項，見第4節 open_questions。
 
 `data_integration.py` 的對應修改：`build_patient_clinical_profile()` 新增對應的 keyword-only 參數（皆預設空/None），維持既有呼叫端零改動即可運作；新增資料缺口比照既有 `DataGapFlag` 模式（例如 `data_source_registry` 全部 `NOT_INTEGRATED` 時，記一筆 `DataGapFlag(source="clinical_data_layer", status="missing", relevant_downstream_stages=("clinical_state","calculators",...))`）。
 
@@ -550,7 +550,7 @@ def derive_clinical_state(
     """純函式，reuse 既有 Layer3/4/5 報告物件（不重算）：
     1. 併發症(ComplicationReport.findings) → ClinicalFinding，status=CONFIRMED，
        domain 由 COMPLICATION_CATEGORY_TO_DOMAIN 映射；NEPHROPATHY 類另把
-       ComplicationFinding.ckd_stage 附進 severity（明確標註：此為 Part1
+       ComplicationFinding.ckd_stage 附進 severity（明確標註：此為 dm_eligibility
        CKDAssessment.stage() 的 P4P 收案分期子集，不等於規格§6.1完整
        KDIGO G1-G5/A1-A3，見第4節open_questions#2）。
     2. Care Gap(CareGapReport.deduplicated_missing_items) → ClinicalFinding，
@@ -1232,10 +1232,10 @@ class PipelineFinalResult:
 
 | calculator_id | 公式/切點來源 | 輸入資料狀態 |
 |---|---|---|
-| `KDIGO_GA` | 規格§6.1；G1-G5/A1-A3 為國際通用 KDIGO 標準分期表 | 完全由 Part1 既有 `LabResult`(eGFR/UACR) + age_years 支援，無 Layer1 缺口 |
-| `FIB4` | 規格§6.2：`Age×AST/(Platelet×√ALT)`，`<1.3`/`>=1.3` | 完全由 Part1 既有 `LabResult`(AST/ALT/platelet) 支援，需新增 item_code 命名常數 |
+| `KDIGO_GA` | 規格§6.1；G1-G5/A1-A3 為國際通用 KDIGO 標準分期表 | 完全由 dm_eligibility 既有 `LabResult`(eGFR/UACR) + age_years 支援，無 Layer1 缺口 |
+| `FIB4` | 規格§6.2：`Age×AST/(Platelet×√ALT)`，`<1.3`/`>=1.3` | 完全由 dm_eligibility 既有 `LabResult`(AST/ALT/platelet) 支援，需新增 item_code 命名常數 |
 | `BNP_NTPROBNP_HF_SCREEN` | 規格§6.4：`BNP>=50` 或 `NT-proBNP>=125` | 需新增 item_code 命名常數，資料源仍是 LabResult |
-| `ABI_TBI_PAD_SCREEN` | 規格§6.5：`ABI<=0.90`/`>1.40`/`TBI<=0.70` | 新增 `VascularExam`（`clinical_data_layer.py`）支援，Part1 原無此類別 |
+| `ABI_TBI_PAD_SCREEN` | 規格§6.5：`ABI<=0.90`/`>1.40`/`TBI<=0.70` | 新增 `VascularExam`（`clinical_data_layer.py`）支援，dm_eligibility 原無此類別 |
 | `IWGDF_FOOT_RISK` | 規格§10：Category0-3 條件與追蹤頻率 | 新增 `FootNeuroExam`+`VascularExam`+既有 `CKDAssessment` 組合支援 |
 | `ADA_HYPO_L1` | 規格§8：風險因子清單之規則化（非計分公式，需臨床覆核） | 新增 `HypoglycemiaEventRecord`+既有 `MedicationOrder`/`CKDAssessment`/age_years 支援 |
 
@@ -1260,7 +1260,7 @@ class PipelineFinalResult:
 3. **Confirmed CKD 是否需 chronicity 佐證**：目前 `ClinicalStateConfig.tier_a_confirmed_requires_icd_corroboration=True`（較保守：單次 eGFR/UACR 異常僅 SUSPECTED，需 ICD 診斷佐證才 CONFIRMED）。是否應改為要求「egfr/uacr 異常持續>3個月、兩次分期一致」的 KDIGO chronicity 定義，需臨床覆核。
 4. **`sex` 欄位定義**：PREVENT/Legacy ASCVD PCE/KFRE 皆需要，但生理性別/病歷登記性別/社會性別在跨性別病人身上可能不同，需臨床/倫理端確認欄位定義來源，非純工程決定。
 5. **Legacy ASCVD PCE 是否納入 `race_ethnicity`**：規格書本身未逐字給出此工具變數清單（只提工具名稱），本文件依公開發表慣例推測需要，但 AHA 推出 PREVENT 的動機之一正是移除 race-based 係數——是否要在 HIS 保留一個需要 race 變數的 legacy calculator，涉及倫理與資料治理決策，需臨床端與資訊倫理委員會確認。
-6. **`EncounterUtilizationRecord`（ED/門診/住院場域分類）**：Part1 `Encounter`（凍結）無此欄位，但 Karter 工具需要「過去12個月ED就診次數」。本文件裁定在 Part2 新建平行的唯讀擴充結構，不修改 Part1，但需與 Part1 維護者確認是否已有更合適的既有欄位可重用。
+6. **`EncounterUtilizationRecord`（ED/門診/住院場域分類）**：dm_eligibility `Encounter`（凍結）無此欄位，但 Karter 工具需要「過去12個月ED就診次數」。本文件裁定在 dm_care_pipeline 新建平行的唯讀擴充結構，不修改 dm_eligibility，但需與 dm_eligibility 維護者確認是否已有更合適的既有欄位可重用。
 7. **`PatientClinicalProfile` 新增欄位的落地 owner**：`clinical_data_layer.py` 提議的一批新欄位（`vital_signs`/`ophthalmology_findings`/…）與 `sex` 屬於「第1站資料整合」擁有者範圍，需協調由誰實際落地，避免與其他組同時修改 `pipeline_models.py`/`data_integration.py` 衝突。
 8. **IWGDF 病史資料來源優先權**：`FootNeuroExam.ulcer_history`（當次專科檢查記錄）與診斷 ICD-10 碼 `FOOT_ULCER_HISTORY`/`AMPUTATION_HISTORY`（歷史病歷）兩個來源，兩者不一致時的優先權/去重規則尚未定義，需 `iwgdf_foot.py` 實作者裁決。
 9. **CalculatorRegistry 版本隱含 latest 語意**：規格§36 Audit Trail 要求「用哪一版公式」可完整追溯，是否應強制呼叫端一律傳入明確 `version`（不允許隱含 latest），需 Version Control/Audit Trail 策略負責人確認。
@@ -1397,4 +1397,4 @@ tests/dm_care_pipeline/             # 沿用 v1 建議，逐檔對應一份測�
 
 ---
 
-*本文件由整合六段獨立設計而成，建立在 `docs/臨床決策支援管線設計.md`（v1）已落地的 `src/dm_care_pipeline/` 九站骨架之上。實作過程中若發現本文件與規格書、Part1 既有程式碼、或 v1 文件有進一步落差，應優先以 `OpenClaw for Diabetes HIS.md`、`src/dm_eligibility/` 既有程式碼與 `spec/P14_rules_spec.md`/`spec/P7_rules_spec.md` 為準，並回頭更新本文件。任何標記「★」或「TODO」的假設，正式上線前一律需要臨床/品管/藥劑/倫理端逐項覆核（見第5節 open_questions），不可視為已定案。*
+*本文件由整合六段獨立設計而成，建立在 `docs/臨床決策支援管線設計.md`（v1）已落地的 `src/dm_care_pipeline/` 九站骨架之上。實作過程中若發現本文件與規格書、dm_eligibility 既有程式碼、或 v1 文件有進一步落差，應優先以 `OpenClaw for Diabetes HIS.md`、`src/dm_eligibility/` 既有程式碼與 `spec/P14_rules_spec.md`/`spec/P7_rules_spec.md` 為準，並回頭更新本文件。任何標記「★」或「TODO」的假設，正式上線前一律需要臨床/品管/藥劑/倫理端逐項覆核（見第5節 open_questions），不可視為已定案。*

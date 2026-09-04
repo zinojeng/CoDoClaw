@@ -33,7 +33,7 @@ CARE_GAP_REGISTRY: dict[str, tuple[tuple[LabRequirement, ...], str]] = {
 # 品質監測（180天強制檢驗排程）之四項必要檢驗。原始邏輯內嵌於
 # rules_p14.check_quality_monitoring() 的區域變數，架構文件建議
 # rules_p14.py 未來抽成具名常數 export（非破壞性重構，見架構文件5.6節），
-# 在該重構落地前，本模組先在此重申同一份定義，維持與 Part1 行為一致。
+# 在該重構落地前，本模組先在此重申同一份定義，維持與 dm_eligibility 行為一致。
 # TODO（技術債，非本模組可單方面解決）：一旦 rules_p14.py 抽出對應具名
 # 常數，這裡應改為直接 import，避免兩處維護同一份 180 天四項清單。
 QUALITY_MONITORING_LAB_REQUIREMENTS: tuple[LabRequirement, ...] = (
@@ -102,7 +102,7 @@ def assess_care_gaps(
     """`codes_in_scope` 由呼叫端決定（典型作法：取
     `profile.eligibility_report.eligible_codes()` 中已收案/緊接著要申報的
     代碼）。`config` 直接重用 `EligibilityConfig`，確保 GA 替代規則與
-    Part1 收案引擎完全一致。"""
+    dm_eligibility 收案引擎完全一致。"""
     cfg = config or EligibilityConfig()
     state = profile.enrollment_state
     as_of = profile.as_of_date

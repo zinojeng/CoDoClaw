@@ -1,5 +1,5 @@
 """
-【Layer 1 擴充】規格§3 Layer1 的 Part2 擴充：既有 `dm_eligibility.models`
+【Layer 1 擴充】規格§3 Layer1 的 dm_care_pipeline 擴充：既有 `dm_eligibility.models`
 未涵蓋的原始臨床資料容器（生命徵象、眼科/心臟影像、足部/血管檢查、影像研究、
 低血糖事件、行政照護狀態等）。
 
@@ -196,19 +196,19 @@ class AdministrativeCareStatus:
     dietitian_involved: Optional[bool] = None
     source: str = "ADMIN"
     # ckd_p4p_enrolled 刻意不重複維護：改由呼叫端讀
-    # profile.eligibility_report.eligible_codes() 推導（Part1 EligibilityReport
+    # profile.eligibility_report.eligible_codes() 推導（dm_eligibility EligibilityReport
     # 已是收案狀態的權威來源，見架構文件v2 §5節整合原則）。
 
 
 @dataclass(frozen=True)
 class EncounterUtilizationRecord:
-    """★ 新增、平行於 Part1 `Encounter`（凍結，不修改）的「就醫場域分類」
+    """★ 新增、平行於 dm_eligibility `Encounter`（凍結，不修改）的「就醫場域分類」
     容器，供 Karter Hypoglycemia Tier B calculator 之
-    `ed_visits_prior_12mo`/`prior_hypo_related_ed_or_hosp` 使用。Part1
+    `ed_visits_prior_12mo`/`prior_hypo_related_ed_or_hosp` 使用。dm_eligibility
     `Encounter` 本身沒有門診/急診/住院分類欄位，這是唯讀的平行擴充，不改動
-    Part1 既有物件（見架構文件v2 第4/5節 open_questions）。"""
+    dm_eligibility 既有物件（見架構文件v2 第4/5節 open_questions）。"""
 
-    encounter_id: str  # 建議與 Part1 Encounter.encounter_id 對應，供交叉核對
+    encounter_id: str  # 建議與 dm_eligibility Encounter.encounter_id 對應，供交叉核對
     visit_date: date
     setting: Literal["outpatient", "ed", "inpatient"]
     hypoglycemia_related: Optional[bool] = None

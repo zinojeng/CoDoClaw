@@ -137,7 +137,7 @@ DEFAULT_STATUS_TO_TRAFFIC_LIGHT: dict[ClinicalStatus, TrafficLight] = {
 
 # ClinicalDomain → ClinicalDataSourceRegistry 欄位名，僅列出依賴 Layer1
 # 擴充來源系統（`clinical_data_layer.py`）才能評估的 domain；未列出的 domain
-# （KIDNEY/ASCVD/CEREBROVASCULAR/GLYCEMIC_CONTROL/HYPOGLYCEMIA）仰賴 Part1
+# （KIDNEY/ASCVD/CEREBROVASCULAR/GLYCEMIC_CONTROL/HYPOGLYCEMIA）仰賴 dm_eligibility
 # 既有 HIS/LIS 資料（`PatientEnrollmentState.encounters`/`lab_results`），
 # 不透過本表判斷 GRAY（見 `_domain_traffic_light()`）。
 DOMAIN_TO_SOURCE_REGISTRY_FIELD: dict[ClinicalDomain, str] = {
@@ -447,7 +447,7 @@ def _domain_traffic_light(
         # 的必要條件之一，但非充分條件（規格3.1節原文），本檔案在缺乏額外
         # 「已篩檢陰性」證據時，寧可保守回報 GRAY 而非默認 GREEN（鐵律6）。
         return TrafficLight.GRAY
-    # 不依賴 Layer1 擴充來源的 domain（仰賴 Part1 核心 HIS/LIS 資料）：
+    # 不依賴 Layer1 擴充來源的 domain（仰賴 dm_eligibility 核心 HIS/LIS 資料）：
     # 有任何就診/檢驗紀錄即視為已評估 → GREEN；完全無資料 → GRAY。
     state = profile.enrollment_state
     if state.encounters or state.lab_results:
