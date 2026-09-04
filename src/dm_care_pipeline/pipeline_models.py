@@ -74,6 +74,7 @@ class PatientClinicalProfile:
     eligibility_report: Optional[EligibilityReport] = None
     physician: Optional[PhysicianStatus] = None
     eligibility_report_as_of_mismatch: bool = False
+    eligibility_report_patient_id_mismatch: bool = False
     lab_series_by_item: dict[str, tuple] = field(default_factory=dict)  # item_code(大寫) → LabResult 序列（新到舊）
     active_diagnosis_codes: frozenset[str] = frozenset()  # 完整 ICD-10 碼（非3碼前綴），diagnosis_lookback_days 窗口內
     active_medication_atc_codes: frozenset[str] = frozenset()

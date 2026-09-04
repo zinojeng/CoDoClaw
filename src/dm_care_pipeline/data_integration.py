@@ -95,15 +95,45 @@ def build_patient_clinical_profile(
     if eligibility_report is None and cfg.auto_run_eligibility_engine_if_missing and eligibility_engine is not None:
         eligibility_report = eligibility_engine.evaluate(state, physician)
 
+    eligibility_report_patient_id_mismatch = False
+    if eligibility_report is not None and eligibility_report.patient_id != state.patient_id:
+        eligibility_report_patient_id_mismatch = True
+        warnings.append(
+            f"傳入之 eligibility_report.patient_id({eligibility_report.patient_id}) 與 "
+            f"state.patient_id({state.patient_id}) 不一致——判定為另一位病人的收案資格報告，"
+            "本站不將其收進 profile.eligibility_report（鐵律5：不靜默混用跨病人資料）"
+        )
+        data_gaps.append(
+            DataGapFlag(
+                source="eligibility_report",
+                status="unknown",
+                detail=f"提供之 EligibilityReport 屬於病人 {eligibility_report.patient_id}，非本次評估病人 "
+                f"{state.patient_id}，已捨棄不用；下游視同未提供 EligibilityReport",
+                relevant_downstream_stages=("care_gap", "guideline_recommendation", "followup"),
+            )
+        )
+        eligibility_report = None
+
     eligibility_report_as_of_mismatch = False
     if eligibility_report is not None and eligibility_report.as_of_date != as_of:
         eligibility_report_as_of_mismatch = True
         warnings.append(
             f"傳入之 eligibility_report.as_of_date({eligibility_report.as_of_date}) 與 "
-            f"state.as_of_date({as_of}) 不一致，下游站點使用時應留意時效性"
+            f"state.as_of_date({as_of}) 不一致——已過期/未來的收案資格報告不具時效性代表性，"
+            "本站不將其收進 profile.eligibility_report（鐵律5：不靜默假設過期資料仍然有效）"
         )
+        data_gaps.append(
+            DataGapFlag(
+                source="eligibility_report",
+                status="unknown",
+                detail=f"提供之 EligibilityReport.as_of_date({eligibility_report.as_of_date}) 與本次評估 "
+                f"as_of_date({as_of}) 不一致，已捨棄不用；下游視同未提供 EligibilityReport",
+                relevant_downstream_stages=("care_gap", "guideline_recommendation", "followup"),
+            )
+        )
+        eligibility_report = None
 
-    if eligibility_report is None:
+    if eligibility_report is None and not eligibility_report_patient_id_mismatch and not eligibility_report_as_of_mismatch:
         data_gaps.append(
             DataGapFlag(
                 source="eligibility_report",
@@ -172,6 +202,7 @@ def build_patient_clinical_profile(
         eligibility_report=eligibility_report,
         physician=physician,
         eligibility_report_as_of_mismatch=eligibility_report_as_of_mismatch,
+        eligibility_report_patient_id_mismatch=eligibility_report_patient_id_mismatch,
         lab_series_by_item=lab_series_by_item,
         active_diagnosis_codes=active_diagnosis_codes,
         active_medication_atc_codes=active_medication_atc_codes,

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from dm_eligibility.models import PatientEnrollmentState
+from dm_eligibility.models import EligibilityReport, PatientEnrollmentState
 
 from dm_care_pipeline.clinical_data_layer import (
     AdministrativeCareStatus,
@@ -169,3 +169,51 @@ def test_profile_passes_through_new_keyword_fields():
     profile = build_patient_clinical_profile(state, vital_signs=vitals, sex="female")
     assert profile.vital_signs == vitals
     assert profile.sex == "female"
+
+
+# ---------------------------------------------------------------------------
+# 回歸測試：eligibility_report 跨病人/過期資料防護（鐵律5：不靜默混用）
+# ---------------------------------------------------------------------------
+
+
+def test_profile_drops_eligibility_report_for_a_different_patient():
+    """規格精神：EligibilityReport 屬於另一位病人時，絕不能靜默流向 care_gap/
+    guideline_recommendation/followup——先前 data_integration.py 只比對
+    as_of_date，從未檢查 patient_id，會讓另一病人的收案資格報告驅動本次
+    評估的 care gap 與「今日已申報」判斷。"""
+    state = make_state(patient_id="P1")
+    other_patient_report = EligibilityReport(patient_id="P999", as_of_date=AS_OF)
+
+    profile = build_patient_clinical_profile(state, eligibility_report=other_patient_report)
+
+    assert profile.eligibility_report is None
+    assert profile.eligibility_report_patient_id_mismatch is True
+    gap_sources = {g.source for g in profile.data_gaps}
+    assert "eligibility_report" in gap_sources
+
+
+def test_profile_drops_eligibility_report_with_stale_as_of_date():
+    """回歸測試：`eligibility_report_as_of_mismatch` 先前只被寫入、從未被
+    下游讀取，過期/未來的 EligibilityReport 仍會被當成本次評估的收案資格
+    現況使用。現在應直接捨棄，下游視同未提供。"""
+    state = make_state(patient_id="P1", as_of_date=AS_OF)
+    stale_report = EligibilityReport(patient_id="P1", as_of_date=date(2024, 1, 1))
+
+    profile = build_patient_clinical_profile(state, eligibility_report=stale_report)
+
+    assert profile.eligibility_report is None
+    assert profile.eligibility_report_as_of_mismatch is True
+    gap_sources = {g.source for g in profile.data_gaps}
+    assert "eligibility_report" in gap_sources
+
+
+def test_profile_keeps_matching_eligibility_report():
+    """正向對照：patient_id 與 as_of_date 皆相符時，報告應正常流入 profile。"""
+    state = make_state(patient_id="P1", as_of_date=AS_OF)
+    matching_report = EligibilityReport(patient_id="P1", as_of_date=AS_OF)
+
+    profile = build_patient_clinical_profile(state, eligibility_report=matching_report)
+
+    assert profile.eligibility_report is matching_report
+    assert profile.eligibility_report_patient_id_mismatch is False
+    assert profile.eligibility_report_as_of_mismatch is False
