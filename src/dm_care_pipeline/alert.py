@@ -91,12 +91,28 @@ def classify_alert_batch(
     findings: Sequence[ClinicalFinding],
     categories: Optional[dict[str, str]] = None,  # finding_id -> safety category（選填，見 classify_alert() 說明）
     config: Optional[AlertClassificationConfig] = None,
+    *,
+    patient_id: Optional[str] = None,
+    as_of_date: Optional[date] = None,
 ) -> AlertReport:
     """規格pseudocode 簽名只有 `(findings, config=None)`，未帶
-    `patient_id`/`as_of_date`——`AlertReport` 需要的這兩個欄位由本函式從
-    `findings` 推斷（取第一筆的 `patient_id`/`date`）。`findings` 為空時
-    無從推斷，`patient_id=""`、`as_of_date=None`（本檔案刻意不虛構一個
-    日期）；呼叫端應自行確保空清單是預期情境（例如病人完全無 finding）。
+    `patient_id`/`as_of_date`——`AlertReport` 需要的這兩個欄位若未由呼叫端
+    明確提供，退回從 `findings` 推斷（取第一筆的 `patient_id`/`date`）。
+    `findings` 為空且未提供 `patient_id`/`as_of_date` 時無從推斷，
+    `patient_id=""`、`as_of_date=None`（本檔案刻意不虛構一個日期）；
+    呼叫端應自行確保空清單是預期情境（例如病人完全無 finding）。
+
+    ★ 修正（Codex #30）：先前唯一的來源是「推斷自 findings[0]」——但
+    finding 的 `date` 是**證據日期**（例如檢驗抽血日、診斷紀錄日），可能
+    是好幾年前，不是「本次評估」的日期；`findings` 為空時更直接回傳
+    `patient_id=""`/`as_of_date=None`，即使呼叫端（例如
+    `pre_visit_brief.generate_pre_visit_brief()`）明明知道真正的
+    `profile.patient_id`/`profile.as_of_date`。新增 keyword-only
+    `patient_id`/`as_of_date` 參數，提供時優先採用（呼叫端明確知道的
+    評估基準日，優於從證據日期反推）；未提供時維持原本推斷邏輯，向下
+    相容規格pseudocode 的最簡呼叫方式
+    `classify_alert_batch(findings)`。
+
     `categories` 為本檔案新增的選填參數（見 `classify_alert()` 說明），
     未提供時所有 finding 只走 override/status 兩層判斷，向下相容
     `classify_alert_batch(findings)` 這種最簡呼叫方式。"""
@@ -108,9 +124,12 @@ def classify_alert_batch(
         level = classify_alert(finding, category=categories.get(finding.finding_id), config=cfg)
         by_level[level].append(finding)
 
+    resolved_patient_id = patient_id if patient_id is not None else (findings[0].patient_id if findings else "")
+    resolved_as_of_date = as_of_date if as_of_date is not None else (findings[0].date if findings else None)
+
     return AlertReport(
-        patient_id=findings[0].patient_id if findings else "",
-        as_of_date=findings[0].date if findings else None,  # type: ignore[arg-type]
+        patient_id=resolved_patient_id,
+        as_of_date=resolved_as_of_date,  # type: ignore[arg-type]
         by_level=by_level,
         safety_alert_count=len(by_level[AlertLevel.SAFETY_ALERT]),
     )

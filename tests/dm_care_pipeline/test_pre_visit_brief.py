@@ -258,6 +258,45 @@ def test_care_gap_agent_report_data_gaps_flow_into_brief():
     assert "care_gap_clocks:OTHER_STAGE_ONLY" not in gap_sources
 
 
+def test_alert_report_uses_profile_as_of_date_not_finding_evidence_date():
+    """回歸測試（Codex #30）：`alert_report.as_of_date` 先前由
+    `classify_alert_batch()` 從第一筆 finding 的證據日期（例如檢驗抽血
+    日）反推，可能是好幾年前；`generate_pre_visit_brief()` 明明手上有
+    `profile.as_of_date`（本次評估的真正日期），應優先採用。"""
+    old_evidence_date = date(2019, 1, 1)
+    finding = make_finding("f1", ClinicalDomain.KIDNEY)
+    finding = ClinicalFinding(
+        finding_id=finding.finding_id,
+        patient_id=finding.patient_id,
+        domain=finding.domain,
+        condition=finding.condition,
+        status=finding.status,
+        date=old_evidence_date,
+        generated_at=finding.generated_at,
+    )
+    clinical_state = make_clinical_state((finding,))
+    brief = generate_pre_visit_brief(
+        _FakeProfile("P1", AS_OF), make_trend_report(), clinical_state, {},
+        GuidelineRecommendationReport(patient_id="P1", as_of_date=AS_OF),
+        present_for_decision([], patient_id="P1", as_of_date=AS_OF),
+    )
+    assert brief.alert_report.as_of_date == AS_OF
+    assert brief.alert_report.patient_id == "P1"
+
+
+def test_alert_report_has_patient_id_and_as_of_date_even_with_no_findings():
+    """正向對照：完全無 finding 時，先前 alert_report.patient_id/
+    as_of_date 會是 ""/None，即使呼叫端明明知道正確答案。"""
+    clinical_state = make_clinical_state(())
+    brief = generate_pre_visit_brief(
+        _FakeProfile("P1", AS_OF), make_trend_report(), clinical_state, {},
+        GuidelineRecommendationReport(patient_id="P1", as_of_date=AS_OF),
+        present_for_decision([], patient_id="P1", as_of_date=AS_OF),
+    )
+    assert brief.alert_report.patient_id == "P1"
+    assert brief.alert_report.as_of_date == AS_OF
+
+
 def test_patient_id_and_as_of_date_come_from_profile():
     brief = generate_pre_visit_brief(
         _FakeProfile("P99", date(2025, 1, 1)), make_trend_report(), make_clinical_state(()), {},

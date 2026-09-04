@@ -144,7 +144,16 @@ def generate_pre_visit_brief(
     source 去重，避免與 clinical_state.data_gaps 中可能已存在的同一筆
     缺漏重複列出。"""
     evidence_index = {f.finding_id: f for f in clinical_state.findings}
-    alert_report = classify_alert_batch(list(clinical_state.findings), config=alert_config)
+    # ★ 修正（Codex #30）：明確傳入 patient_id/as_of_date（本函式已有的
+    # profile 欄位），不讓 classify_alert_batch() 從 findings[0] 的證據
+    # 日期反推——findings 為空、或第一筆證據日期是好幾年前的舊紀錄時，
+    # 推斷值都會是錯的，即使呼叫端（這裡）明明知道正確答案。
+    alert_report = classify_alert_batch(
+        list(clinical_state.findings),
+        config=alert_config,
+        patient_id=profile.patient_id,
+        as_of_date=profile.as_of_date,
+    )
 
     data_gaps = list(clinical_state.data_gaps)
     if care_gap_agent_report is not None:

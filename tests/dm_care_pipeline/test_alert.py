@@ -132,6 +132,39 @@ def test_batch_empty_findings_yields_empty_placeholders_not_fabricated_date():
     assert all(v == [] for v in report.by_level.values())
 
 
+def test_batch_explicit_patient_id_and_as_of_date_override_inference():
+    """回歸測試（Codex #30）：`findings[0].date` 是證據日期（例如檢驗抽血
+    日），可能是好幾年前，不是「本次評估」的日期——呼叫端若明確知道真正
+    的 patient_id/as_of_date（例如 pre_visit_brief.py 手上的
+    profile.patient_id/profile.as_of_date），應優先採用，而非從證據日期
+    反推。"""
+    old_evidence_date = date(2019, 1, 1)
+    findings = [
+        ClinicalFinding(
+            finding_id="f1",
+            patient_id="P1",
+            domain=ClinicalDomain.KIDNEY,
+            condition="CKD",
+            status=ClinicalStatus.CONFIRMED,
+            date=old_evidence_date,
+            generated_at=datetime.now(),
+        )
+    ]
+    report = classify_alert_batch(findings, patient_id="P1", as_of_date=AS_OF)
+    assert report.as_of_date == AS_OF
+    assert report.as_of_date != old_evidence_date
+
+
+def test_batch_explicit_patient_id_and_as_of_date_used_even_with_no_findings():
+    """回歸測試（Codex #30）：`findings` 為空時先前一律回傳
+    `patient_id=""`/`as_of_date=None`，即使呼叫端明明知道正確答案（例如
+    完全無 finding 的病人，pre_visit_brief.py 仍知道是哪位病人、哪一天
+    評估）。"""
+    report = classify_alert_batch([], patient_id="P1", as_of_date=AS_OF)
+    assert report.patient_id == "P1"
+    assert report.as_of_date == AS_OF
+
+
 def test_batch_every_alert_level_key_present_even_when_empty():
     report = classify_alert_batch([make_finding(ClinicalStatus.CONFIRMED)])
     assert set(report.by_level.keys()) == set(AlertLevel)
