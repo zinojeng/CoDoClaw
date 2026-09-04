@@ -13,6 +13,12 @@ Sex/eGFR/UACR，可預測 2-year 與 5-year kidney failure risk；只列變數�
 calculator_id 採用 `KFRE_4VAR`（比規格§35 範例 `calculator/KFRE/v1` 多了
 variant 後綴，因規格書外部已知另有 6/8-variable KFRE，見架構文件v2 第5節
 open_questions#10，未最終裁定）。
+
+已發表驗證證據：KFRE 是這幾個 Tier B 工具中外部驗證最成熟的一個——已在
+多國/多世代廣泛驗證（綜述見 Ooi et al. 2024, PMID 38273788：稱其已被廣泛
+外部驗證且優於其他模型）。秘魯世代驗證（PMID 41350644，n=30,031）：
+區辨力佳（C-index 0.85-0.88），但校正不佳（2年 O/E ratio 高達1.84），
+需重新校正才可用於臨床決策。目前未見台灣本地驗證研究。
 """
 
 from __future__ import annotations

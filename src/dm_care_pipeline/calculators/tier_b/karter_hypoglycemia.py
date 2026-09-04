@@ -19,6 +19,12 @@ hypoglycemia-related ED/hospitalization 風險）。
 `encounter_utilization` 參數並透過 `_build_karter_inputs()` 組裝（過去365天
 窗口內 `setting=="ed"` 之筆數/是否曾有低血糖相關 ED/住院），呼叫端未提供
 時仍以 None 傳入，不臆測。
+
+已發表驗證證據：Karter et al. 2017, JAMA Intern Med（PMID 28828479）——
+Kaiser Permanente Northern California 世代推導，並在兩個獨立美國世代
+外部驗證：Veterans Health Administration（C=0.81）、Group Health
+Cooperative（C=0.79）。驗證品質相對紮實，但均侷限於美國醫療體系，目前
+未見台灣/亞洲族群外部驗證研究。
 """
 
 from __future__ import annotations

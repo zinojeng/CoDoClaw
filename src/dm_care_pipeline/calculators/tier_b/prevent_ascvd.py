@@ -13,6 +13,18 @@ Tier B — PREVENT / Legacy ASCVD PCE Risk Engine。
       同時保留，供不同 guideline/workflow 使用；同樣只有工具名稱，無完整
       係數，屬 Tier B。`race_ethnicity` 是否納入為倫理待裁定項（見架構
       文件v2 第5節 open_questions#5）。
+
+已發表驗證證據：
+    - PREVENT：2026年美國30家醫療系統68萬人EHR外部驗證（Khan et al.,
+      PMID 42554063）：校正良好，C-index 0.77-0.82。2026年中國 CHARLS
+      世代驗證（Fan et al., PMID 42393162，n=10,068）：AUC 僅0.61-0.62
+      （遠低於美國驗證的0.76-0.79），校正斜率0.47-0.51——需大幅重新校正
+      才能用於華人族群，是本工具屬 Tier B 的實證依據之一。
+    - Legacy PCE：十年來被外部驗證數十次，多數研究顯示系統性高估風險
+      （SPRINT 世代驗證 PMID 31088530；PURE-Colombia PMID 39041366）。
+      中國世代驗證（China-PAR, Yang et al. 2016, PMID 27682885）明確指出
+      PCE 校正 χ² 遠高於本土方程式；新疆維吾爾/哈薩克世代驗證
+      （PMID 32993590）同樣顯示需重新校正才可用於華人族群。
 """
 
 from __future__ import annotations
