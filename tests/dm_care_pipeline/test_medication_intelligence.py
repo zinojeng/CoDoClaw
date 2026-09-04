@@ -192,6 +192,15 @@ def test_kidney_protective_therapy_gap_silent_without_ckd():
     assert not any(r.rule_id == "KIDNEY_PROTECTIVE_THERAPY_GAP" for r in report.recommendations)
 
 
+def test_kidney_protective_therapy_gap_silent_for_g2a1_not_ckd():
+    """回歸測試（Codex #13）：_has_ckd() 先前把「非 G1」都當 CKD，G2A1
+    （eGFR 60-89、UACR 正常，不符 KDIGO CKD 定義）會被誤判有 CKD，進而
+    在未使用 SGLT2i/GLP-1RA 時觸發不必要的腎臟保護治療缺口建議。"""
+    inp = make_check_input(kdigo_g_stage="G2", kdigo_a_stage="A1", active_drug_classes=frozenset())
+    report = build_medication_intelligence_report(inp)
+    assert not any(r.rule_id == "KIDNEY_PROTECTIVE_THERAPY_GAP" for r in report.recommendations)
+
+
 def test_secondary_ascvd_prevention_gap_triggers_on_confirmed_finding():
     finding = make_finding(ClinicalDomain.CEREBROVASCULAR, "腦血管疾病")
     inp = make_check_input(clinical_state=state_with_findings(finding))

@@ -186,7 +186,12 @@ class MedicationIndicationRule:
 
 
 def _has_ckd(inp: MedicationCheckInput) -> bool:
-    return (inp.kdigo_g_stage is not None and inp.kdigo_g_stage != "G1") or (
+    # ★ 修正（Codex #13）：與 calculators/ckd_ga.py 的 is_normal 判準一致
+    # ——KDIGO CKD 定義是「eGFR<60（G3a以下）」或「腎損傷標記（含A2/A3
+    # 白蛋白尿）持續≥3個月」二擇一成立，G2（eGFR 60-89）本身不構成 CKD。
+    # 先前把「非 G1」都當 CKD，會讓單純 G2A1（無白蛋白尿）的病人被誤判
+    # 有 CKD，進而可能被開立不必要的腎臟保護治療缺口建議。
+    return (inp.kdigo_g_stage is not None and inp.kdigo_g_stage not in ("G1", "G2")) or (
         inp.kdigo_a_stage is not None and inp.kdigo_a_stage != "A1"
     )
 

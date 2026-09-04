@@ -117,16 +117,24 @@ class CKDGACalculator:
         result_summary = f"CKD {g_stage or 'G?'}{a_stage or 'A?'}"
         result_values: dict[str, object] = {"g_stage": g_stage, "a_stage": a_stage, "egfr": inputs.egfr, "uacr": inputs.uacr}
 
-        is_normal = g_stage == "G1" and a_stage == "A1"
+        # ★ 修正（Codex #13）：KDIGO CKD 定義是「eGFR<60（G3a以下）」或
+        # 「腎損傷標記（含 A2/A3 白蛋白尿）持續≥3個月」二擇一成立才算
+        # CKD。G2（eGFR 60-89）本身不是腎功能異常的判準——若同時 A1（無
+        # 白蛋白尿、無其他腎損傷標記），G2A1 不符合 CKD 定義，只有 G1A1
+        # 才是。先前只把 G1A1 視為正常，導致單純因年齡等因素 eGFR 落在
+        # 60-89 區間、UACR 正常的病人也被標記 SUSPECTED CKD。
+        is_normal = g_stage in ("G1", "G2") and a_stage == "A1"
         clinical_status: Optional[ClinicalStatus] = None
         if g_stage is not None and a_stage is not None and not is_normal:
             clinical_status = ClinicalStatus.CONFIRMED if inputs.corroborating_ckd_diagnosis else ClinicalStatus.SUSPECTED
         elif (g_stage is not None) != (a_stage is not None):
             # 只有單一軸可判定：保守起見，若該軸本身已顯示異常，仍標記
             # SUSPECTED（不因缺另一軸資料而silently視為正常）；若唯一可得
-            # 的軸為正常值（G1 或 A1），因無法排除另一軸異常，不給
-            # clinical_status（留待資料補齊）。
-            available_abnormal = (g_stage is not None and g_stage != "G1") or (a_stage is not None and a_stage != "A1")
+            # 的軸為正常值（G1/G2 或 A1，與上方 is_normal 同一判準），因
+            # 無法排除另一軸異常，不給 clinical_status（留待資料補齊）。
+            available_abnormal = (g_stage is not None and g_stage not in ("G1", "G2")) or (
+                a_stage is not None and a_stage != "A1"
+            )
             if available_abnormal:
                 clinical_status = ClinicalStatus.CONFIRMED if inputs.corroborating_ckd_diagnosis else ClinicalStatus.SUSPECTED
 

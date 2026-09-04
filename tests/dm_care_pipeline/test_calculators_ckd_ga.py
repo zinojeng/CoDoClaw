@@ -60,3 +60,20 @@ def test_only_egfr_provided_abnormal_is_flagged_without_silently_normal():
 def test_only_egfr_provided_normal_gives_no_clinical_status_pending_data():
     result = calc.compute(CKDGAInputs(patient_id="P1", as_of=AS_OF, egfr=95.0))
     assert result.clinical_status is None
+
+
+def test_g2a1_is_normal_no_clinical_status():
+    """回歸測試（Codex #13）：KDIGO CKD 定義是 eGFR<60（G3a以下）或有腎
+    損傷標記（含A2/A3白蛋白尿）持續≥3個月，G2（eGFR 60-89）本身不構成
+    CKD。先前只有 G1A1 視為正常，導致 G2A1（eGFR 60-89、UACR 正常）被
+    誤標 SUSPECTED CKD。"""
+    result = calc.compute(CKDGAInputs(patient_id="P1", as_of=AS_OF, egfr=70.0, uacr=10.0))
+    assert result.result_summary == "CKD G2A1"
+    assert result.clinical_status is None
+
+
+def test_only_egfr_provided_g2_gives_no_clinical_status_pending_data():
+    """回歸測試（Codex #13，單軸分支）：只有 eGFR 可判定且落在 G2 時，同樣
+    不應因「非 G1」就標記 SUSPECTED——判準需與 is_normal 一致。"""
+    result = calc.compute(CKDGAInputs(patient_id="P1", as_of=AS_OF, egfr=70.0))
+    assert result.clinical_status is None
