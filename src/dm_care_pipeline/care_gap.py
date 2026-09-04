@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import date
-from typing import Sequence
+from typing import Optional, Sequence
 
 from dm_eligibility import rules_p14, rules_p7
 from dm_eligibility.models import EligibilityConfig, LabRequirement, LabResult
@@ -19,16 +19,35 @@ from .pipeline_models import PatientClinicalProfile
 
 # 照護碼 → (必要檢驗清單, 規格出處字串)。出處字串供 Guideline 階段的
 # spec_reference 溯源使用（整合新增需求，見架構文件3.5節）。
+#
+# P7001C 不在此表：其必要檢驗依「當年度第幾次申報」而不同（dm_eligibility
+# 上游修正，見 rules_p7.P7001_LAB_REQUIREMENTS_BY_CLAIM_NUMBER 逐字出處），
+# 無法用固定清單表示，改為 _requirements_for_code() 依 state 動態查詢。
 CARE_GAP_REGISTRY: dict[str, tuple[tuple[LabRequirement, ...], str]] = {
     "P1407C": (rules_p14.P1407_LAB_REQUIREMENTS_BASE, "P14 spec (b) B.2 附表8.2.1"),
     "P1408C": (rules_p14.P1408_LAB_REQUIREMENTS_BASE, "P14 spec (b) B.3 附表8.2.2"),
     "P1409C": (rules_p14.P1409_LAB_REQUIREMENTS_BASE, "P14 spec (b) B.4 附表8.2.3"),
-    "P7001C": (rules_p7.P7001_LAB_REQUIREMENTS_BASE, "P7 spec (d)"),
     "P7002C": (rules_p7.P7002_LAB_REQUIREMENTS_BASE, "P7 spec (d)"),
     # TODO：P1410C/P1411C/P4301C/P4302C/P4303C/P7003C 規格書逐字擷取未見
     # 完整必要檢驗清單，刻意留空；查無對應 code 一律進 unregistered_codes
     # 顯式回報，不可靜默視為「無缺漏」（見架構文件第8節#5）。
 }
+
+_P7001_SPEC_REFERENCE = "P7 spec (d)"
+
+
+def _requirements_for_code(code: str, state, as_of: date) -> Optional[tuple[tuple[LabRequirement, ...], str]]:
+    """P7001C 的必要檢驗依「當年度第幾次申報」而不同（P700101/02/03 各自
+    只要求部分項目，見 dm_eligibility.rules_p7 逐字出處），無法用
+    CARE_GAP_REGISTRY 的固定清單表示。在此依 state 動態算出 claim_number
+    ——與 check_p7001_eligibility() 用同一條公式（count_claims+1，clamp
+    1-3），直接 reuse dm_eligibility 既有的
+    _p7001_lab_requirements_for_claim_number()，不重抄一份對照表（鐵律7）。
+    其餘代碼一律走靜態 CARE_GAP_REGISTRY。"""
+    if code == "P7001C":
+        claim_number = state.count_claims("P7001C", year=as_of.year) + 1
+        return rules_p7._p7001_lab_requirements_for_claim_number(claim_number), _P7001_SPEC_REFERENCE
+    return CARE_GAP_REGISTRY.get(code)
 
 # 品質監測（180天強制檢驗排程）之四項必要檢驗。原始邏輯內嵌於
 # rules_p14.check_quality_monitoring() 的區域變數，架構文件建議
@@ -184,7 +203,7 @@ def assess_care_gaps(
                     deduplicated_missing_items[existing_idx] = replace(existing, owning_codes=merged_owning)
 
     for code in codes_in_scope:
-        entry = CARE_GAP_REGISTRY.get(code)
+        entry = _requirements_for_code(code, state, as_of)
         if entry is None:
             unregistered_codes.append(code)
             continue

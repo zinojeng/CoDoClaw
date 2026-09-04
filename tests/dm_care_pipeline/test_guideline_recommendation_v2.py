@@ -146,7 +146,7 @@ def test_iwgdf_foot_frequency_reminder_triggers_on_any_computed_result():
 
 
 def test_nhi_ckd_p4p_lab_gap_matches_p7_lab_item_codes():
-    p7_req = rules_p7.P7001_LAB_REQUIREMENTS_BASE[0]  # 09005C B.S.
+    p7_req = rules_p7.P7001_LAB_REQUIREMENTS_BY_CLAIM_NUMBER[1][0]  # 09005C B.S.（P700101）
     item = CareGapItem(
         requirement=p7_req,
         satisfied=False,

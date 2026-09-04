@@ -423,6 +423,27 @@ def test_care_gap_quality_monitoring_triggers_on_matching_encounter():
     assert len(lipid_descriptions) == 4  # 4 個各自獨立項目，非合併成一項
 
 
+def test_care_gap_p7001_requirements_depend_on_claim_number_in_year():
+    """整合回歸測試：dm_eligibility 上游修正（p4p session 2026-09-05 同步）
+    把 P7001_LAB_REQUIREMENTS_BASE 拆成 P7001_LAB_REQUIREMENTS_BY_CLAIM_
+    NUMBER（依當年度第1/2/3次申報各自要求不同子集），care_gap.py 對應改為
+    _requirements_for_code() 動態查詢，不再是 CARE_GAP_REGISTRY 靜態條目。
+    此測試鎖定當年度第1次申報只要求 B.S/HbA1C，第2次才要求 LDL/Cr。"""
+    state_first_claim = make_state()  # 當年度尚無 P7001C 申報紀錄 → 第1次
+    profile_first = build_patient_clinical_profile(state_first_claim)
+    report_first = assess_care_gaps(profile_first, codes_in_scope=["P7001C"], include_quality_monitoring=False)
+    first_descriptions = {it.requirement.description for it in report_first.by_code["P7001C"]}
+    assert any("B.S" in d for d in first_descriptions)
+    assert not any("LDL" in d for d in first_descriptions)
+
+    state_second_claim = make_state(claims=[CodeClaim("P7001C", AS_OF - timedelta(days=100))])
+    profile_second = build_patient_clinical_profile(state_second_claim)
+    report_second = assess_care_gaps(profile_second, codes_in_scope=["P7001C"], include_quality_monitoring=False)
+    second_descriptions = {it.requirement.description for it in report_second.by_code["P7001C"]}
+    assert any("LDL" in d for d in second_descriptions)
+    assert not any("B.S" in d for d in second_descriptions)
+
+
 # ---------------------------------------------------------------------------
 # 6. Guideline Recommendation
 # ---------------------------------------------------------------------------
