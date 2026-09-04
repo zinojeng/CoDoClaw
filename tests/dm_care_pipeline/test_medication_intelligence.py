@@ -109,6 +109,47 @@ def test_build_medication_check_input_maps_atc_codes_to_drug_classes():
     assert inp.active_drug_classes == {"SGLT2_INHIBITOR", "METFORMIN"}
 
 
+def test_meglitinide_mapping_excludes_non_meglitinide_a10bx_drugs():
+    """回歸測試（Codex #16）：A10BX 是 WHO ATC「其他降血糖藥」子類，不是
+    meglitinide 專屬前綴——guar gum（例如 A10BX01）等非 meglitinide 藥物
+    先前也會被整段 A10BX 前綴誤標成 meglitinide。"""
+    state = PatientEnrollmentState(
+        patient_id="P1", as_of_date=AS_OF, encounters=[make_dm_encounter(("A10BX01",))]
+    )
+    profile = build_patient_clinical_profile(state)
+    inp = build_medication_check_input(profile, empty_state())
+    assert "MEGLITINIDE" not in inp.active_drug_classes
+
+
+def test_meglitinide_mapping_still_includes_known_meglitinide_codes():
+    """正向對照：repaglinide（A10BX02）/nateglinide（A10BX03）仍應被正確
+    分類為 meglitinide。"""
+    state = PatientEnrollmentState(
+        patient_id="P1", as_of_date=AS_OF, encounters=[make_dm_encounter(("A10BX02",))]
+    )
+    profile = build_patient_clinical_profile(state)
+    inp = build_medication_check_input(profile, empty_state())
+    assert "MEGLITINIDE" in inp.active_drug_classes
+
+
+def test_combination_product_flagged_as_data_gap_not_silently_dropped():
+    """回歸測試（Codex #16）：A10BD 複方降血糖製劑（如
+    metformin/SGLT2i 複方）不會匹配任何單一藥物類別前綴，先前完全靜默
+    消失——病人明明有用藥，卻跟「查過確認沒用藥」看起來一樣。現在應在
+    data_gaps 明確標記，且流入 MedicationIntelligenceReport.warnings。"""
+    state = PatientEnrollmentState(
+        patient_id="P1", as_of_date=AS_OF, encounters=[make_dm_encounter(("A10BD25",))]
+    )
+    profile = build_patient_clinical_profile(state)
+    inp = build_medication_check_input(profile, empty_state())
+    assert inp.active_drug_classes == frozenset()  # 複方成分本身仍未拆解（誠實回報，非本檔案片面決定）
+    gap_sources = {g.source for g in inp.data_gaps}
+    assert "active_medication_atc_codes" in gap_sources
+
+    report = build_medication_intelligence_report(inp)
+    assert any("A10BD" in w for w in report.warnings)
+
+
 def test_build_medication_check_input_extracts_kdigo_stage_and_egfr_from_calculator_result():
     state = PatientEnrollmentState(patient_id="P1", as_of_date=AS_OF, encounters=[])
     profile = build_patient_clinical_profile(state)
@@ -156,9 +197,19 @@ def test_assess_ada_level1_hypoglycemia_risk_thin_wrapper():
         frozenset({"INSULIN"}),
         major_factors=frozenset({"kidney_failure"}),
         risk_factors_assessed=True,
+        has_medication_data=True,
     )
     assert result.execution_status == CalculatorExecutionStatus.COMPUTED
     assert result.clinical_status == ClinicalStatus.HIGH_RISK
+
+
+def test_assess_ada_level1_hypoglycemia_risk_no_medication_data_is_insufficient_data():
+    """回歸測試（Codex #14）：has_medication_data 預設 False 時，即使
+    active_drug_classes 恰好是空集合，也不可默視為『確認未使用』。"""
+    state = PatientEnrollmentState(patient_id="P1", as_of_date=AS_OF, encounters=[])
+    profile = build_patient_clinical_profile(state)
+    result = assess_ada_level1_hypoglycemia_risk(profile, frozenset())
+    assert result.execution_status == CalculatorExecutionStatus.INSUFFICIENT_DATA
 
 
 # ---------------------------------------------------------------------------

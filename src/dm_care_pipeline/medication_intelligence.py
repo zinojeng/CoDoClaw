@@ -43,11 +43,26 @@ MEDICATION_ATC_CLASS_MAP: dict[str, tuple[str, ...]] = {
     "GLP1_RA": ("A10BJ",),
     "METFORMIN": ("A10BA",),
     "SULFONYLUREA": ("A10BB",),
-    "MEGLITINIDE": ("A10BX",),
+    # ★ 修正（Codex #16）：A10BX 是 WHO ATC「其他降血糖藥」子類，不是
+    # meglitinide 專屬前綴——guar gum、pramlintide、imeglimin、
+    # tirzepatide 等非 meglitinide 藥物也落在 A10BX 下，先前整個前綴都
+    # 誤標成 meglitinide。收斂為兩個明確、穩定的 meglitinide 品項代碼
+    # （repaglinide A10BX02、nateglinide A10BX03）；完整 A10BX 品項對照
+    # 仍需藥劑部逐項覆核（同既有 open_question，不可由本檔案片面決定其餘
+    # A10BX 品項是否該歸類為 meglitinide）。
+    "MEGLITINIDE": ("A10BX02", "A10BX03"),
     "DPP4_INHIBITOR": ("A10BH",),
     "TZD": ("A10BG",),
     "INSULIN": ("A10A",),
 }
+
+# ★ 修正（Codex #16）：A10BD（複方降血糖製劑，如 metformin+SGLT2i 複方）
+# 不會匹配上表任何單一前綴，導致病人明明有用藥、卻被 `_map_atc_codes_to_
+# drug_classes()` 判定成「未使用任何已知藥物類別」，完全靜默消失——比
+# 「查無用藥資料」更危險，因為看起來像已經查過、確認沒用藥。逐一拆解每個
+# 複方代碼對應哪些成分需藥劑部持續維護（該對照表變動頻繁），非本檔案可
+# 片面決定；改為明確追蹤「有 A10BD 複方但未拆解成分」這件事本身。
+COMBINATION_PRODUCT_ATC_PREFIX = "A10BD"
 
 
 def _map_atc_codes_to_drug_classes(atc_codes: frozenset[str]) -> frozenset[str]:
@@ -58,6 +73,14 @@ def _map_atc_codes_to_drug_classes(atc_codes: frozenset[str]) -> frozenset[str]:
             if any(code_upper.startswith(p) for p in prefixes):
                 classes.add(drug_class)
     return frozenset(classes)
+
+
+def has_unclassified_combination_product(atc_codes: frozenset[str]) -> bool:
+    """病人是否有 A10BD 複方降血糖製劑，其成分未被 MEDICATION_ATC_CLASS_MAP
+    任何單一藥物類別覆蓋。呼叫端可用此旗標觸發「需藥劑部覆核用藥分類」的
+    提示，而非誤讀為「未使用任何降血糖藥」（見 COMBINATION_PRODUCT_ATC_PREFIX
+    註解）。"""
+    return any(c.upper().startswith(COMBINATION_PRODUCT_ATC_PREFIX) for c in atc_codes)
 
 
 @dataclass(frozen=True)
@@ -84,6 +107,7 @@ def assess_ada_level1_hypoglycemia_risk(
     major_factors: frozenset[str] = frozenset(),
     minor_factors: frozenset[str] = frozenset(),
     risk_factors_assessed: bool = False,
+    has_medication_data: bool = False,
 ) -> CalculatorResult:
     """★ 註：本函式在 v2 中是薄封裝——實際邏輯已收斂到
     `calculators/hypoglycemia_ada_l1.py`（唯一權威實作，避免與 Calculator
@@ -93,13 +117,21 @@ def assess_ada_level1_hypoglycemia_risk(
     `minor_factors`/`risk_factors_assessed` 預設空/False——呼叫端若未另外
     提供風險因子評估結果，本函式忠實回傳 INSUFFICIENT_DATA（不可靜默假設
     『沒提供=沒風險』，鐵律6），由呼叫端（例如未來 Pre-Visit Brief 組裝層）
-    決定是否要另外呼叫並提供完整風險因子。"""
+    決定是否要另外呼叫並提供完整風險因子。
+
+    ★ 修正（Codex #14）：`active_drug_classes` 為空集合時，先前無條件把
+    `on_insulin`/`on_sulfonylurea`/`on_meglitinide` 當成「確認未使用」
+    （False），無法區分「完全沒有用藥資料可查」與「查過、確認未使用」。
+    `has_medication_data` 預設 False（保守：呼叫端未明確表示有查過用藥
+    資料時，視為未知），由呼叫端傳入
+    `bool(profile.enrollment_state.encounters)`（與 pipeline.py
+    `_build_ada_hypo_inputs()` 同一判準）。"""
     inputs = HypoglycemiaRiskFactorInputs(
         patient_id=profile.patient_id,
         as_of=profile.as_of_date,
-        on_insulin="INSULIN" in active_drug_classes,
-        on_sulfonylurea="SULFONYLUREA" in active_drug_classes,
-        on_meglitinide="MEGLITINIDE" in active_drug_classes,
+        on_insulin=("INSULIN" in active_drug_classes) if has_medication_data else None,
+        on_sulfonylurea=("SULFONYLUREA" in active_drug_classes) if has_medication_data else None,
+        on_meglitinide=("MEGLITINIDE" in active_drug_classes) if has_medication_data else None,
         major_factors=major_factors,
         minor_factors=minor_factors,
         risk_factors_assessed=risk_factors_assessed,
@@ -133,9 +165,27 @@ def build_medication_check_input(
         # ★ 零風險因子資訊時的保守預設：呼叫端未提供 major/minor factors，
         # 一律回傳 INSUFFICIENT_DATA（見 assess_ada_level1_hypoglycemia_risk
         # docstring），不臆測風險等級。
-        hypoglycemia_result = assess_ada_level1_hypoglycemia_risk(profile, active_drug_classes)
+        hypoglycemia_result = assess_ada_level1_hypoglycemia_risk(
+            profile, active_drug_classes, has_medication_data=bool(profile.enrollment_state.encounters)
+        )
 
     age_years = int(profile.enrollment_state.age_years) if profile.enrollment_state.age_years is not None else None
+
+    data_gaps = list(profile.data_gaps)
+    # ★ 修正（Codex #16）：A10BD 複方製劑的成分未被拆解進 active_drug_
+    # classes，若不明確回報，這位病人「有用藥、但分類不出成分」會跟「查過
+    # 確認沒用藥」看起來一模一樣。
+    if has_unclassified_combination_product(profile.active_medication_atc_codes):
+        data_gaps.append(
+            DataGapFlag(
+                source="active_medication_atc_codes",
+                status="unknown",
+                detail="病人使用 A10BD 複方降血糖製劑，其成分未拆解進 MEDICATION_ATC_CLASS_MAP"
+                "（需藥劑部覆核複方成分對照），Guideline-Directed Medication Check 可能低估"
+                "實際用藥覆蓋範圍",
+                relevant_downstream_stages=("medication_intelligence",),
+            )
+        )
 
     return MedicationCheckInput(
         patient_id=profile.patient_id,
@@ -146,7 +196,7 @@ def build_medication_check_input(
         kdigo_a_stage=kdigo_a_stage,
         age_years=age_years,
         hypoglycemia_level1_result=hypoglycemia_result,
-        data_gaps=list(profile.data_gaps),
+        data_gaps=data_gaps,
         egfr_value=egfr_value,
     )
 
@@ -377,7 +427,13 @@ def build_medication_intelligence_report(
     active_rules = list(rules) if rules is not None else default_medication_indication_rules()
     checker = contraindication_checker or NullContraindicationChecker()
     recommendations: list[MedicationRecommendation] = []
-    warnings: list[str] = []
+    # ★ 修正（Codex #16）：`inp.data_gaps`（含 build_medication_check_input()
+    # 新增的「A10BD 複方成分未拆解」缺漏）先前完全沒有被本函式讀取，等於
+    # 有記錄卻無人看見。只帶入標記給本站（"medication_intelligence"）的
+    # 缺漏，不重複帶入其他站點專屬的缺漏（鐵律5：資料缺漏不可靜默，需外顯）。
+    warnings: list[str] = [
+        gap.detail for gap in inp.data_gaps if "medication_intelligence" in gap.relevant_downstream_stages
+    ]
 
     for rule in active_rules:
         try:

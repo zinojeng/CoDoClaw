@@ -283,17 +283,55 @@ def _build_bnp_inputs(profile: PatientClinicalProfile, complication_report: Comp
     )
 
 
+# §8「近 3-6 個月 Level 2/3 hypoglycemia」的回溯窗口天數。規格書給的是
+# 區間、非單一切點，取較寬鬆一端（6個月）以避免低估風險因子（與
+# iwgdf_foot.py 的 OVERDUE_USES_UPPER_BOUND 選「較寬鬆一端」原則相同，
+# 方向相反——那裡是為了避免 alert fatigue 而晚一點才判逾期，這裡是為了
+# 避免漏抓真正的近期嚴重低血糖史而抓較長窗口）。工程保守選擇，非規格逐字
+# 定義，正式上線前需臨床覆核。
+RECENT_SEVERE_HYPOGLYCEMIA_LOOKBACK_DAYS = 180
+
+
+def _has_recent_severe_hypoglycemia(profile: PatientClinicalProfile) -> bool:
+    """★ 修正（Codex #15）：`profile.hypoglycemia_events`（架構文件v2
+    3.1節新增）儲存了 event_date/severity，正是 §8 major risk factor
+    「近3-6個月 Level 2/3 hypoglycemia」需要的資料，先前完全沒有消費者
+    ——即使有近期 Level 2/3 事件也不會影響風險分級。鐵律5：晚於 as_of
+    的事件不代表「已知」資訊，一併排除。"""
+    cutoff = profile.as_of_date - timedelta(days=RECENT_SEVERE_HYPOGLYCEMIA_LOOKBACK_DAYS)
+    return any(
+        e.severity in ("level2", "level3") and cutoff <= e.event_date <= profile.as_of_date
+        for e in profile.hypoglycemia_events
+    )
+
+
 def _build_ada_hypo_inputs(profile: PatientClinicalProfile) -> HypoglycemiaRiskFactorInputs:
     classes = _active_drug_classes(profile)
+    # ★ 修正（Codex #14）：`_active_drug_classes()` 對「完全沒有就診/用藥
+    # 紀錄」與「有紀錄、但確認未使用胰島素/SU/meglitinide」都回傳空
+    # frozenset，先前一律當成後者（False），導致空病人也被判定
+    # COMPUTED LOW 而非 INSUFFICIENT_DATA——calculator 本身已有
+    # `on_insulin is None and ...` 的防護（見 hypoglycemia_ada_l1.py），
+    # 但呼叫端從未傳過 None，該防護形同虛設。
+    has_encounter_data = bool(profile.enrollment_state.encounters)
+    # ★ 修正（Codex #15）：見 _has_recent_severe_hypoglycemia()。其餘 §8
+    # major/minor risk factors（intensive insulin/impaired awareness/
+    # kidney failure/cognitive impairment/metabolic surgery 病史等）仍
+    # 無結構化資料來源；risk_factors_assessed 僅在「至少有低血糖事件史
+    # 資料可查」時設 True——代表已納入這一項評估，不代表已排除其餘
+    # major/minor factors（鐵律6：不臆測未評估項目為陰性）。
+    has_hypo_event_data = bool(profile.hypoglycemia_events)
+    major_factors: frozenset[str] = (
+        frozenset({"recent_level2_or_3_hypoglycemia_3_6mo"}) if _has_recent_severe_hypoglycemia(profile) else frozenset()
+    )
     return HypoglycemiaRiskFactorInputs(
         patient_id=profile.patient_id,
         as_of=profile.as_of_date,
-        on_insulin="INSULIN" in classes,
-        on_sulfonylurea="SULFONYLUREA" in classes,
-        on_meglitinide="MEGLITINIDE" in classes,
-        # major/minor risk factors 需結構化風險因子評估（例如近期低血糖病史
-        # 問卷），本管線尚無此類資料來源，risk_factors_assessed 恆 False，
-        # 不臆測（鐵律6）。
+        on_insulin=("INSULIN" in classes) if has_encounter_data else None,
+        on_sulfonylurea=("SULFONYLUREA" in classes) if has_encounter_data else None,
+        on_meglitinide=("MEGLITINIDE" in classes) if has_encounter_data else None,
+        major_factors=major_factors,
+        risk_factors_assessed=has_hypo_event_data,
     )
 
 

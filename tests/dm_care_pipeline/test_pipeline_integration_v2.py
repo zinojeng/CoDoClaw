@@ -25,6 +25,7 @@ from dm_eligibility.models import (
 
 from dm_care_pipeline.calculators.base import CalculatorExecutionStatus, CalculatorTier
 from dm_care_pipeline.calculators.registry import CalculatorRegistry
+from dm_care_pipeline.clinical_data_layer import HypoglycemiaEventRecord
 from dm_care_pipeline.clinical_data_object import ClinicalDomain
 from dm_care_pipeline.data_integration import build_patient_clinical_profile
 from dm_care_pipeline.followup import PendingOrder
@@ -202,6 +203,71 @@ def test_pipeline_routes_mi_history_patient_to_secondary_prevention():
 
     for calc_id in ("PREVENT", "ASCVD_PCE_2013"):
         assert run_result.calculator_results[calc_id].execution_status == CalculatorExecutionStatus.NOT_APPLICABLE
+
+
+def test_pipeline_ada_hypo_insufficient_data_for_patient_with_no_encounters():
+    """回歸測試（Codex #14）：完全沒有就診/用藥紀錄時，
+    _active_drug_classes() 回傳空集合，先前一律被當成「確認未使用胰島素/
+    SU/meglitinide」（False），讓完全沒有資料的病人被判定 COMPUTED LOW，
+    而非 calculator 本身設計的 INSUFFICIENT_DATA。"""
+    state = PatientEnrollmentState(patient_id="P1", as_of_date=AS_OF, age_years=55)
+    physician = PhysicianStatus(physician_id="DOC1", is_dm_ckd_dual_qualified=True)
+    eligibility_report = EligibilityEngine().evaluate(state, physician)
+    run_result = run_stages_1_to_7(state, eligibility_report=eligibility_report, physician=physician)
+
+    ada_result = run_result.calculator_results["ADA_HYPO_L1"]
+    assert ada_result.execution_status == CalculatorExecutionStatus.INSUFFICIENT_DATA
+    assert set(ada_result.missing_inputs) == {"on_insulin", "on_sulfonylurea", "on_meglitinide"}
+
+
+def test_pipeline_ada_hypo_recent_severe_hypoglycemia_drives_high_risk():
+    """回歸測試（Codex #15）：profile.hypoglycemia_events 先前完全沒有
+    消費者，即使有近期 Level 2/3 低血糖事件也不影響風險分級。"""
+    state = full_fixture_state()
+    state.encounters.append(
+        Encounter(
+            encounter_id="E-insulin",
+            visit_date=AS_OF,
+            physician_id="DOC1",
+            diagnoses=(DiagnosisRecord("E11.9", is_primary=True),),
+            medication_orders=(MedicationOrder("A10AB01"),),
+        )
+    )
+    physician = PhysicianStatus(physician_id="DOC1", is_dm_ckd_dual_qualified=True)
+    eligibility_report = EligibilityEngine().evaluate(state, physician)
+    hypo_events = (HypoglycemiaEventRecord(event_date=AS_OF - timedelta(days=30), severity="level2", setting="ed"),)
+    run_result = run_stages_1_to_7(
+        state, eligibility_report=eligibility_report, physician=physician, hypoglycemia_events=hypo_events
+    )
+
+    ada_result = run_result.calculator_results["ADA_HYPO_L1"]
+    assert ada_result.execution_status == CalculatorExecutionStatus.COMPUTED
+    assert ada_result.result_values["risk_level"] == "HIGH"
+    assert "recent_level2_or_3_hypoglycemia_3_6mo" in ada_result.result_values["matched_major_factors"]
+
+
+def test_pipeline_ada_hypo_no_hypo_event_data_stays_insufficient_data():
+    """正向對照：沒有任何 hypoglycemia_events 資料時（既不是空事件史，
+    是完全沒有這個資料來源），不可假裝已完整評估 major/minor factors——
+    risk_factors_assessed 應維持 False，calculator 回傳 INSUFFICIENT_DATA
+    而非冒充 LOW/MODERATE。"""
+    state = full_fixture_state()
+    state.encounters.append(
+        Encounter(
+            encounter_id="E-insulin-2",
+            visit_date=AS_OF,
+            physician_id="DOC1",
+            diagnoses=(DiagnosisRecord("E11.9", is_primary=True),),
+            medication_orders=(MedicationOrder("A10AB01"),),
+        )
+    )
+    physician = PhysicianStatus(physician_id="DOC1", is_dm_ckd_dual_qualified=True)
+    eligibility_report = EligibilityEngine().evaluate(state, physician)
+    run_result = run_stages_1_to_7(state, eligibility_report=eligibility_report, physician=physician)
+
+    ada_result = run_result.calculator_results["ADA_HYPO_L1"]
+    assert ada_result.execution_status == CalculatorExecutionStatus.INSUFFICIENT_DATA
+    assert ada_result.missing_inputs == ("risk_factors_assessed",)
 
 
 def test_pipeline_kfre_not_applicable_for_non_ckd_patient():
