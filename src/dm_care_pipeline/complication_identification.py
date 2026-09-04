@@ -85,11 +85,21 @@ COMPLICATION_CATEGORY_DISPLAY_NAME: dict[str, str] = {
 }
 
 
+# I20-I24（含 I21 急性心肌梗塞/ACS）。是否併入本檔案 COMPLICATION_ICD10_
+# PREFIXES 的 CVD 類別（進而影響 risk.py 高風險分級、guideline 建議等
+# 全管線下游消費者）仍是待臨床確認事項（見 ComplicationConfig.
+# include_broader_ihd_codes）。獨立提升為模組層級常數，供
+# calculators/tier_b/prevent_ascvd.py 的 secondary-prevention 路由判斷直接
+# reuse（鐵律7）——OpenClaw HIS §7 明文將「MI/ACS」列為 secondary
+# prevention 觸發條件之一，這是狹義、與是否併入 CVD 類別分開的判斷。
+MI_ACS_ICD10_PREFIXES: tuple[str, ...] = ("I20", "I21", "I22", "I23", "I24")
+
+
 @dataclass
 class ComplicationConfig:
     code_table: dict[str, tuple[str, ...]] = field(default_factory=lambda: dict(COMPLICATION_ICD10_PREFIXES))
     include_broader_ihd_codes: bool = False  # I20-I24，TODO 待臨床確認是否併入 CVD 類別
-    broader_ihd_codes: tuple[str, ...] = ("I20", "I21", "I22", "I23", "I24")
+    broader_ihd_codes: tuple[str, ...] = MI_ACS_ICD10_PREFIXES
     include_stroke_sequelae_codes: bool = False  # I69.3，TODO 待臨床確認
     stroke_sequelae_codes: tuple[str, ...] = ("I69.3",)
     primary_diagnosis_only: bool = False

@@ -23,17 +23,22 @@ open_questions#10，未最終裁定）。
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import ClassVar, Optional
 
 from ...clinical_data_object import ModelProvenance
-from ..base import CalculatorTier
+from ..base import CalculatorExecutionStatus, CalculatorResult, CalculatorTier
+from ..ckd_ga import _a_stage, _g_stage
 from ._base import TierBCalculatorBase
 
 CALCULATOR_ID = "KFRE_4VAR"
 CALCULATOR_VERSION = "v1.0"
 SPEC_REFERENCE = "OpenClaw for Diabetes HIS.md §12"
+# KFRE 定義為 CKD 病人的腎衰竭風險預測（規格§12/§35：Kidney Failure Risk
+# Equation，前提即為已有腎衰竭風險可估），與 calculators/ckd_ga.py 的
+# is_normal 判準一致：G1/G2 且 A1 不符合 KDIGO CKD 定義。
+_CKD_NORMAL_G_STAGES = ("G1", "G2")
 
 
 @dataclass(frozen=True)
@@ -60,3 +65,30 @@ class Kfre4VarCalculator(TierBCalculatorBase):
             taiwan_local_validation_status="not_locally_validated",
             spec_reference=SPEC_REFERENCE + "; §37",
         )
+
+    def compute(self, inputs: Kfre4VarInputs) -> CalculatorResult:
+        # ★ 修正（Codex #22）：先前沒有任何適用性判斷，非 CKD 病人（如
+        # eGFR/UACR 皆正常之 G1A1/G2A1）也會拿到 KFRE 的
+        # REQUIRES_EXTERNAL_VALIDATED_MODEL「待驗證模型」care gap 與
+        # KFRE_INFO 資訊揭露，即使 KFRE 本身定義即為 CKD 病人的腎衰竭風險
+        # 預測，對非 CKD 病人完全不適用。只在 eGFR/UACR 皆齊備、且換算出
+        # 的 KDIGO 分期明確不符合 CKD 定義時才判 NOT_APPLICABLE；任一缺值
+        # 時無法判斷適用性，一律走原本的 Tier B 流程（缺值本身會被
+        # required_inputs 標記）。
+        if inputs.egfr is not None and inputs.uacr is not None:
+            g_stage = _g_stage(inputs.egfr)
+            a_stage = _a_stage(inputs.uacr)
+            is_ckd = not (g_stage in _CKD_NORMAL_G_STAGES and a_stage == "A1")
+            if not is_ckd:
+                base = super().compute(inputs)
+                return replace(
+                    base,
+                    execution_status=CalculatorExecutionStatus.NOT_APPLICABLE,
+                    interpretation=(
+                        f"KFRE 適用於已診斷 CKD 之病人（OpenClaw HIS §12），病人 eGFR/UACR 換算 "
+                        f"KDIGO 分期為 {g_stage}{a_stage}，不符合 CKD 定義（G1/G2 且 A1），"
+                        "不需計算腎衰竭風險。"
+                    ),
+                    action=None,
+                )
+        return super().compute(inputs)

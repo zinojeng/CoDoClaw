@@ -38,7 +38,12 @@ from .care_gap import CareGapReport, assess_care_gaps
 from .care_gap_clocks import CareGapAgentConfig, CareGapAgentReport, assess_care_gap_agent
 from .clinical_data_object import ClinicalStatus
 from .clinical_state import ClinicalStateConfig, PatientClinicalState, derive_clinical_state
-from .complication_identification import ComplicationConfig, ComplicationReport, identify_complications
+from .complication_identification import (
+    MI_ACS_ICD10_PREFIXES,
+    ComplicationConfig,
+    ComplicationReport,
+    identify_complications,
+)
 from .data_integration import build_patient_clinical_profile
 from .education import (
     EducationPlan,
@@ -314,6 +319,20 @@ def _build_watch_dm_inputs(profile: PatientClinicalProfile) -> WatchDmInputs:
     )
 
 
+def _has_mi_acs_history(profile: PatientClinicalProfile) -> bool:
+    """★ 修正（Codex #21）：狹義判斷病人是否有 MI/ACS 病史（I20-I24），供
+    PREVENT/PCE 的 secondary prevention 路由使用（OpenClaw HIS §7 明文將
+    「MI/ACS」列為觸發條件之一，獨立於 complication_report 是否把 I20-I24
+    併入 CVD 類別——那是另一個仍待臨床確認的決定，見
+    complication_identification.ComplicationConfig.include_broader_ihd_codes
+    ／MI_ACS_ICD10_PREFIXES 註解）。直接 reuse dm_eligibility.Encounter.
+    has_diagnosis_prefix()，不重寫 ICD 掃描（鐵律7）。"""
+    return any(
+        e.has_diagnosis_prefix(MI_ACS_ICD10_PREFIXES, primary_only=False)
+        for e in profile.enrollment_state.valid_encounters()
+    )
+
+
 def _build_prevent_inputs(profile: PatientClinicalProfile, complication_report: ComplicationReport) -> PreventInputs:
     vital = _latest_vital_sign(profile)
     assessment = _latest_ckd_assessment(profile)
@@ -326,10 +345,12 @@ def _build_prevent_inputs(profile: PatientClinicalProfile, complication_report: 
         patient_id=profile.patient_id,
         as_of=profile.as_of_date,
         age_years=profile.enrollment_state.age_years,
+        sex=profile.sex,  # ★ 修正（Codex #20）：先前未傳入，PREVENT 是性別分開的方程式
         systolic_bp=vital.systolic_bp if vital else None,
         total_cholesterol=total_chol,
         hdl_c=hdl,
         current_statin_treatment=_has_drug_class(profile, (_STATIN_ATC_PREFIX,)),
+        antihypertensive_treatment=None,  # 無專屬降血壓用藥ATC分類判斷（開放問題，需藥師覆核ATC範圍，同 treated_hypertension）
         smoking_status=vital.smoking_status.value if vital else None,
         egfr=assessment.egfr if assessment else None,
         bmi=vital.bmi if vital else None,
@@ -338,6 +359,7 @@ def _build_prevent_inputs(profile: PatientClinicalProfile, complication_report: 
         hba1c_latest=hba1c,
         complications=frozenset(f.category for f in complication_report.findings),
         has_revascularization_history=has_revasc,
+        has_mi_acs_history=_has_mi_acs_history(profile),  # ★ 修正（Codex #21）
     )
 
 
@@ -351,6 +373,7 @@ def _build_legacy_ascvd_inputs(profile: PatientClinicalProfile, complication_rep
         patient_id=profile.patient_id,
         as_of=profile.as_of_date,
         age_years=profile.enrollment_state.age_years,
+        sex=profile.sex,  # ★ 修正（Codex #20）：先前未傳入，PCE 是性別分開的方程式
         systolic_bp=vital.systolic_bp if vital else None,
         total_cholesterol=total_chol,
         hdl_c=hdl,
@@ -360,6 +383,7 @@ def _build_legacy_ascvd_inputs(profile: PatientClinicalProfile, complication_rep
         race_ethnicity=None,  # ★ 倫理待裁定項（open_questions#5），本檔案不預設任何值
         complications=frozenset(f.category for f in complication_report.findings),
         has_revascularization_history=has_revasc,
+        has_mi_acs_history=_has_mi_acs_history(profile),  # ★ 修正（Codex #21）
     )
 
 

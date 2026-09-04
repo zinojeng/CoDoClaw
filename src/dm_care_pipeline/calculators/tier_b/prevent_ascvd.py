@@ -57,13 +57,29 @@ LEGACY_ASCVD_MAX_AGE_YEARS = 79
 
 
 def already_in_secondary_prevention(
-    complications: frozenset[str], has_revascularization_history: Optional[bool] = None
+    complications: frozenset[str],
+    has_revascularization_history: Optional[bool] = None,
+    has_mi_acs_history: Optional[bool] = None,
 ) -> bool:
     """§7 逐字文字路由規則，非風險計算，不受 Tier B 限制。命中既有
     `COMPLICATION_ICD10_PREFIXES` 的 CVD/CEREBROVASCULAR/PVD 類別，或曾有
-    血管重建史，即視為 secondary prevention。"""
+    血管重建史，即視為 secondary prevention。
 
-    return bool(complications & SECONDARY_PREVENTION_COMPLICATION_CATEGORIES) or bool(has_revascularization_history)
+    ★ 修正（Codex #21）：§7 明文把「MI/ACS」列為獨立的觸發條件之一，但
+    `COMPLICATION_ICD10_PREFIXES["CVD"]` 目前只有 I25.x（慢性缺血性心臟
+    病），I20-I24（含 I21 急性心肌梗塞）預設不算 CVD（見
+    `complication_identification.ComplicationConfig.
+    include_broader_ihd_codes`，是否併入 CVD 類別仍待臨床確認，屬另一個
+    決定）。單純只有 I21.9、沒有 I25.x 的病人，先前 `complications` 集合
+    不含 CVD，導致完全沒有 MI/ACS 史的病人被漏掉，PREVENT/PCE 仍停留在
+    primary prevention 分支，而非規格要求的 established ASCVD pathway。
+    `has_mi_acs_history` 獨立於 CVD 類別定義，直接掃描 I20-I24 診斷碼。"""
+
+    return (
+        bool(complications & SECONDARY_PREVENTION_COMPLICATION_CATEGORIES)
+        or bool(has_revascularization_history)
+        or bool(has_mi_acs_history)
+    )
 
 
 @dataclass(frozen=True)
@@ -71,10 +87,21 @@ class PreventInputs:
     patient_id: str
     as_of: date
     age_years: Optional[float] = None
+    # ★ 修正（Codex #20）：AHA PREVENT 是性別分開的方程式（男女個別係數），
+    # sex 是模型本身需要的變數，先前完全沒有這個欄位——即使 profile.sex
+    # 有提供，也無管道傳入 PREVENT。
+    sex: Optional[str] = None
     systolic_bp: Optional[float] = None
     total_cholesterol: Optional[float] = None
     hdl_c: Optional[float] = None
     current_statin_treatment: Optional[bool] = None
+    # ★ 修正（Codex #20）：PREVENT 方程式本身需要「是否使用降血壓藥物」
+    # 作為變數（與 current_statin_treatment 同等地位），先前完全沒有這個
+    # 欄位。呼叫端目前無 ATC 對照表可判斷（見 pipeline.py
+    # _build_prevent_inputs() 註解，與 LegacyAscvdPceInputs.treated_
+    # hypertension 同款開放問題，需藥師覆核 ATC 範圍），欄位先開放、暫傳
+    # None，不可靜默省略整個欄位。
+    antihypertensive_treatment: Optional[bool] = None
     smoking_status: Optional[str] = None
     egfr: Optional[float] = None
     bmi: Optional[float] = None
@@ -84,6 +111,7 @@ class PreventInputs:
     social_deprivation_index: Optional[float] = None
     complications: frozenset[str] = field(default_factory=frozenset)
     has_revascularization_history: Optional[bool] = None
+    has_mi_acs_history: Optional[bool] = None  # ★ 修正（Codex #21），見 already_in_secondary_prevention() 註解
 
 
 class PreventCalculator(TierBCalculatorBase):
@@ -91,10 +119,18 @@ class PreventCalculator(TierBCalculatorBase):
     calculator_version: ClassVar[str] = "v1.0"
     tier: ClassVar[CalculatorTier] = CalculatorTier.B
     required_inputs: ClassVar[tuple[str, ...]] = (
+        # ★ 修正（Codex #20）：age_years 先前被用來做適用年齡範圍判斷
+        # （見 compute()），卻不在 required_inputs 裡——`TierBCalculatorBase.
+        # compute()` 依 required_inputs 組裝 missing_inputs，age_years 缺值
+        # 時完全不會被回報成缺漏。sex/antihypertensive_treatment 是模型
+        # 本身的變數，同樣需要在此列出才會被正確標記缺漏。
+        "age_years",
+        "sex",
         "systolic_bp",
         "total_cholesterol",
         "hdl_c",
         "current_statin_treatment",
+        "antihypertensive_treatment",
         "smoking_status",
         "egfr",
         "bmi",
@@ -111,15 +147,19 @@ class PreventCalculator(TierBCalculatorBase):
         )
 
     def _extract_field_values(self, inputs: PreventInputs) -> dict[str, object]:
-        # complications/has_revascularization_history 是路由用內部變數，
-        # 不是 PREVENT 模型本身的計算變數，故不列入 CalculatorInputField。
+        # complications/has_revascularization_history/has_mi_acs_history
+        # 是路由用內部變數，不是 PREVENT 模型本身的計算變數，故不列入
+        # CalculatorInputField。
         values = super()._extract_field_values(inputs)
         values.pop("complications", None)
         values.pop("has_revascularization_history", None)
+        values.pop("has_mi_acs_history", None)
         return values
 
     def compute(self, inputs: PreventInputs) -> CalculatorResult:
-        if already_in_secondary_prevention(inputs.complications, inputs.has_revascularization_history):
+        if already_in_secondary_prevention(
+            inputs.complications, inputs.has_revascularization_history, inputs.has_mi_acs_history
+        ):
             base = super().compute(inputs)
             return replace(
                 base,
@@ -150,6 +190,9 @@ class LegacyAscvdPceInputs:
     patient_id: str
     as_of: date
     age_years: Optional[float] = None
+    # ★ 修正（Codex #20）：Pooled Cohort Equations 同樣是性別分開的方程式
+    # （男女個別係數），先前完全沒有這個欄位。
+    sex: Optional[str] = None
     systolic_bp: Optional[float] = None
     total_cholesterol: Optional[float] = None
     hdl_c: Optional[float] = None
@@ -162,6 +205,7 @@ class LegacyAscvdPceInputs:
     race_ethnicity: Optional[str] = None  # ★ 倫理待裁定項，見架構文件v2 第5節#5
     complications: frozenset[str] = field(default_factory=frozenset)
     has_revascularization_history: Optional[bool] = None
+    has_mi_acs_history: Optional[bool] = None  # ★ 修正（Codex #21），見 already_in_secondary_prevention() 註解
 
 
 class LegacyAscvdPceCalculator(TierBCalculatorBase):
@@ -169,6 +213,11 @@ class LegacyAscvdPceCalculator(TierBCalculatorBase):
     calculator_version: ClassVar[str] = "v1.0"
     tier: ClassVar[CalculatorTier] = CalculatorTier.B
     required_inputs: ClassVar[tuple[str, ...]] = (
+        # ★ 修正（Codex #20）：age_years 先前用於適用年齡範圍判斷（見
+        # compute()）卻不在 required_inputs 裡，缺值時不會被回報成缺漏；
+        # sex 是模型本身的變數，同樣需要列出。
+        "age_years",
+        "sex",
         "systolic_bp",
         "total_cholesterol",
         "hdl_c",
@@ -191,10 +240,13 @@ class LegacyAscvdPceCalculator(TierBCalculatorBase):
         values = super()._extract_field_values(inputs)
         values.pop("complications", None)
         values.pop("has_revascularization_history", None)
+        values.pop("has_mi_acs_history", None)
         return values
 
     def compute(self, inputs: LegacyAscvdPceInputs) -> CalculatorResult:
-        if already_in_secondary_prevention(inputs.complications, inputs.has_revascularization_history):
+        if already_in_secondary_prevention(
+            inputs.complications, inputs.has_revascularization_history, inputs.has_mi_acs_history
+        ):
             base = super().compute(inputs)
             return replace(
                 base,

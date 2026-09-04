@@ -174,6 +174,53 @@ def test_tier_b_calculators_never_fabricate_a_value():
         assert result.result_values is None
 
 
+def test_pipeline_wires_sex_into_prevent_and_pce_builders():
+    """回歸測試（Codex #20）：pipeline.py 的 _build_prevent_inputs()/
+    _build_legacy_ascvd_inputs() 先前完全不傳 sex，即使 profile.sex 有
+    提供也整條丟棄。"""
+    state = full_fixture_state()
+    physician = PhysicianStatus(physician_id="DOC1", is_dm_ckd_dual_qualified=True)
+    eligibility_report = EligibilityEngine().evaluate(state, physician)
+    run_result = run_stages_1_to_7(state, eligibility_report=eligibility_report, physician=physician, sex="female")
+
+    for calc_id in ("PREVENT", "ASCVD_PCE_2013"):
+        sex_field = next(f for f in run_result.calculator_results[calc_id].inputs if f.name == "sex")
+        assert sex_field.provided is True
+        assert sex_field.value == "female"
+
+
+def test_pipeline_routes_mi_history_patient_to_secondary_prevention():
+    """回歸測試（Codex #21）：只有 I21（急性心肌梗塞）診斷、沒有 I25.x
+    （慢性缺血性心臟病）的病人，先前不會被 already_in_secondary_
+    prevention() 判定為 secondary prevention，PREVENT/PCE 停留在 primary
+    prevention 分支而非規格要求的 established ASCVD pathway。"""
+    state = full_fixture_state()
+    state.encounters.append(dm_encounter(AS_OF, icd10="I21.9"))
+    physician = PhysicianStatus(physician_id="DOC1", is_dm_ckd_dual_qualified=True)
+    eligibility_report = EligibilityEngine().evaluate(state, physician)
+    run_result = run_stages_1_to_7(state, eligibility_report=eligibility_report, physician=physician)
+
+    for calc_id in ("PREVENT", "ASCVD_PCE_2013"):
+        assert run_result.calculator_results[calc_id].execution_status == CalculatorExecutionStatus.NOT_APPLICABLE
+
+
+def test_pipeline_kfre_not_applicable_for_non_ckd_patient():
+    """回歸測試（Codex #22）：G1A1（明確非 CKD）的病人先前也會拿到 KFRE
+    的「待驗證模型」care gap，即使 KFRE 定義即為 CKD 病人專用。"""
+    state = PatientEnrollmentState(
+        patient_id="P1",
+        as_of_date=AS_OF,
+        encounters=[dm_encounter(AS_OF, icd10="E11.9")],
+        ckd_assessments=[CKDAssessment(AS_OF, egfr=95.0, upcr=10.0, uacr=10.0, is_diabetic=True)],
+        age_years=55,
+    )
+    physician = PhysicianStatus(physician_id="DOC1", is_dm_ckd_dual_qualified=True)
+    eligibility_report = EligibilityEngine().evaluate(state, physician)
+    run_result = run_stages_1_to_7(state, eligibility_report=eligibility_report, physician=physician)
+
+    assert run_result.calculator_results["KFRE_4VAR"].execution_status == CalculatorExecutionStatus.NOT_APPLICABLE
+
+
 def test_custom_calculator_registry_is_not_auto_populated_with_defaults():
     """呼叫端顯式傳入自訂（空）registry 時，不應被本檔案偷偷塞入預設11個
     calculator——尊重呼叫端的顯式選擇。"""
