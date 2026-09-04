@@ -622,10 +622,17 @@ def test_followup_next_visit_date_from_last_p1408_claim():
 
     plan = compute_follow_up_plan(profile, complication_report, assume_eligible_codes_claimed_today=False)
 
+    # 80天前 + 70天追蹤間隔 = 10天前，早於 AS_OF（已逾期）。
     expected = last_p1408 + timedelta(days=SUBSEQUENT_TRACKING_INTERVAL_DAYS)
+    assert expected < AS_OF
+    # next_code_due_dates 忠實記錄實際到期日（含過去日期，供「已逾期多久」判讀）。
     assert plan.next_code_due_dates["P1408C"] == expected
-    assert plan.next_recommended_visit_date == expected
+    # 回歸測試（Codex #28）：next_recommended_visit_date 語意是「建議病人
+    # 下次應該來的日期」，不可能早於今天——已逾期時應收斂為 as_of 當天，
+    # 不可直接回傳過去的到期日。
+    assert plan.next_recommended_visit_date == AS_OF
     assert any("P1408C" in r for r in plan.reasons)
+    assert any("已逾期" in r for r in plan.reasons)
 
 
 def test_followup_falls_back_when_no_due_date_computable():

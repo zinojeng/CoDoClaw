@@ -192,6 +192,16 @@ def compute_follow_up_plan(
     if candidate_dates:
         next_date, reason = min(candidate_dates, key=lambda t: t[0])
         reasons.append(reason)
+        if next_date < as_of:
+            # ★ 修正（Codex #28）：候選到期日可能早於 as_of（例如已逾期
+            # 超過追蹤間隔的 P1408C claim），先前直接把過去的日期當成
+            # 「下次回診建議日」回傳，UI 上會顯示「建議回診日：10天前」
+            # 這種矛盾的過去日期。到期日本身（用於 reasons/next_code_
+            # due_dates 的說明）維持不變、忠實記錄「已逾期多久」，但
+            # `next_recommended_visit_date` 是「建議病人下次應該來的日期」
+            # ，語意上不可能早於今天——已逾期時應立即收案，即 as_of 當天。
+            reasons.append(f"上述到期日 {next_date} 已早於評估日 {as_of}（已逾期），建議回診日收斂為今日 {as_of}")
+            next_date = as_of
     else:
         next_date = as_of + timedelta(days=cmc.fallback_visit_interval_days)
         warnings.append("查無可推算之到期日（照護碼與併發症監測項目皆無到期日），採用預設回診間隔 fallback_visit_interval_days")
